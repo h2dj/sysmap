@@ -213,6 +213,40 @@
     return edge;
   }
 
+  // Insert key: duplicate the selected node (same shape/size/style) and
+  // connect it with an arrow, mimicking chain-building diagram tools.
+  function nodeOverlaps(x, y, w, h) {
+    const pad = 20;
+    return state.nodes.some(n =>
+      !(x + w + pad < n.x || x > n.x + n.w + pad || y + h + pad < n.y || y > n.y + n.h + pad));
+  }
+  function findFreeSpot(x, y, w, h) {
+    let ny = y;
+    for (let i = 0; i < 20 && nodeOverlaps(x, ny, w, h); i++) ny += h + 40;
+    return { x, y: ny };
+  }
+
+  function duplicateConnected(sourceId) {
+    const source = state.nodes.find(n => n.id === sourceId);
+    if (!source) return null;
+    const gap = 80;
+    const spot = findFreeSpot(source.x + source.w + gap, source.y, source.w, source.h);
+    const clone = {
+      id: uid(), shape: source.shape,
+      x: spot.x, y: spot.y, w: source.w, h: source.h,
+      label: source.label, fill: source.fill, stroke: source.stroke,
+    };
+    state.nodes.push(clone);
+    state.edges.push({
+      id: uid(), from: source.id, to: clone.id,
+      label: '', dashed: false, arrowStart: false, arrowEnd: true,
+    });
+    selection = { type: 'node', id: clone.id };
+    render();
+    pushHistory();
+    return clone;
+  }
+
   function removeNode(id) {
     state.nodes = state.nodes.filter(n => n.id !== id);
     state.edges = state.edges.filter(e => e.from !== id && e.to !== id);
@@ -681,7 +715,7 @@
     canvas.classList.toggle('tool-connect', name === 'connect');
     canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond'].includes(name));
     const hints = {
-      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다.',
+      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 노드 선택 후 Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
       circle: '캔버스를 클릭해 원형 노드를 추가하세요.',
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
@@ -883,6 +917,7 @@
 
     if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelection(); return; }
     if (evt.key === 'Escape') { clearSelection(); setTool('select'); return; }
+    if (evt.key === 'Insert' && selection.type === 'node') { evt.preventDefault(); duplicateConnected(selection.id); return; }
 
     const map = { v: 'select', r: 'rect', o: 'circle', d: 'diamond', c: 'connect' };
     const t = map[evt.key.toLowerCase()];
