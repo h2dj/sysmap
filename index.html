@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>시스템 지도 그리기</title>
+<meta name="description" content="브라우저에서 바로 시스템 아키텍처 지도를 그리고 저장·공유할 수 있는 온라인 다이어그램 도구">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%97%BA%EF%B8%8F%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <div class="brand">🗺️ <span>SysMap</span></div>
+    <input id="mapTitle" class="title-input" value="새 시스템 지도" spellcheck="false" aria-label="지도 제목">
+    <div class="spacer"></div>
+    <div class="topbar-actions">
+      <button id="btnNew" class="btn" title="새 지도 (기존 내용은 지워집니다)">새로 만들기</button>
+      <button id="btnImport" class="btn" title="JSON 파일 불러오기">불러오기</button>
+      <input type="file" id="fileInput" accept="application/json,.json" hidden>
+      <div class="dropdown">
+        <button id="btnExport" class="btn btn-primary" title="내보내기">내보내기 ▾</button>
+        <div id="exportMenu" class="dropdown-menu" hidden>
+          <button id="btnExportJson">JSON (.json)</button>
+          <button id="btnExportSvg">SVG 이미지 (.svg)</button>
+          <button id="btnExportPng">PNG 이미지 (.png)</button>
+        </div>
+      </div>
+      <button id="themeToggle" class="btn icon-btn" title="테마 전환">🌙</button>
+    </div>
+  </header>
+
+  <div id="body">
+
+    <aside id="toolbar" aria-label="도구 모음">
+      <div class="tool-group">
+        <button class="tool-btn" data-tool="select" title="선택 / 이동 (V)" aria-pressed="true">
+          <svg viewBox="0 0 24 24"><path d="M4 3l6 16 2.2-6.4L18.6 11z"/></svg>
+          <span>선택</span>
+        </button>
+        <button class="tool-btn" data-tool="rect" title="사각형 노드 (R)">
+          <svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"/></svg>
+          <span>사각형</span>
+        </button>
+        <button class="tool-btn" data-tool="circle" title="원형 노드 (O)">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>
+          <span>원</span>
+        </button>
+        <button class="tool-btn" data-tool="diamond" title="마름모 노드 (D)">
+          <svg viewBox="0 0 24 24"><path d="M12 3l9 9-9 9-9-9z"/></svg>
+          <span>마름모</span>
+        </button>
+        <button class="tool-btn" data-tool="connect" title="연결선 (C)">
+          <svg viewBox="0 0 24 24"><path d="M4 20L20 4M20 4h-6M20 4v6"/></svg>
+          <span>연결</span>
+        </button>
+      </div>
+      <div class="tool-group">
+        <button id="btnDelete" class="tool-btn" title="선택 삭제 (Delete)">
+          <svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V4h6v3M7 7l1 13h8l1-13"/></svg>
+          <span>삭제</span>
+        </button>
+        <button id="btnUndo" class="tool-btn" title="실행 취소 (Ctrl+Z)">
+          <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 3 6.3M4 12V6M4 12h6"/></svg>
+          <span>취소</span>
+        </button>
+        <button id="btnRedo" class="tool-btn" title="다시 실행 (Ctrl+Shift+Z)">
+          <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 0-3 6.3M20 12V6M20 12h-6"/></svg>
+          <span>복구</span>
+        </button>
+      </div>
+      <div class="tool-group zoom-group">
+        <button id="btnZoomOut" class="tool-btn small" title="축소 (-)">−</button>
+        <span id="zoomLabel">100%</span>
+        <button id="btnZoomIn" class="tool-btn small" title="확대 (+)">+</button>
+        <button id="btnZoomReset" class="tool-btn small" title="화면 맞춤 (0)">⤢</button>
+      </div>
+    </aside>
+
+    <main id="canvasWrap">
+      <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="gridPattern" width="24" height="24" patternUnits="userSpaceOnUse">
+            <circle cx="1.5" cy="1.5" r="1.5" class="grid-dot"></circle>
+          </pattern>
+          <marker id="arrowHead" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" class="arrow-fill"></path>
+          </marker>
+        </defs>
+        <g id="viewport">
+          <rect id="gridRect" x="-4000" y="-4000" width="8000" height="8000" fill="url(#gridPattern)" class="ui-only"></rect>
+          <g id="edgesLayer"></g>
+          <g id="nodesLayer"></g>
+          <g id="overlayLayer" class="ui-only"></g>
+        </g>
+      </svg>
+      <div id="emptyHint">
+        <p>👋 빈 캔버스입니다</p>
+        <p>왼쪽 도구에서 <b>사각형·원·마름모</b>를 선택한 뒤 캔버스를 클릭해 시스템 구성 요소를 추가하세요.<br>
+        <b>연결</b> 도구로 요소끼리 이어 데이터 흐름을 표현할 수 있습니다.</p>
+      </div>
+    </main>
+
+    <aside id="propsPanel" hidden>
+      <div class="panel-header">
+        <h3 id="panelTitle">속성</h3>
+        <button id="panelClose" class="icon-btn" title="닫기">✕</button>
+      </div>
+      <div class="panel-body" id="panelBody"></div>
+    </aside>
+
+  </div>
+
+  <footer id="statusbar">
+    <span id="hint">요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다.</span>
+    <span id="counts"></span>
+  </footer>
+
+</div>
+
+<script src="js/app.js" defer></script>
+</body>
+</html>
