@@ -376,6 +376,67 @@
     updatePanel();
   }
 
+  // ---- Arrow-key navigation between nodes -----------------------------------------------------
+  // Lets you hop the selection to the nearest node in a direction — handy
+  // once Insert (or manual drawing) has produced a chain of several nodes.
+  // Edges are deliberately excluded: their midpoints usually sit almost
+  // exactly between two nodes, which would make every hop stop on the
+  // connecting edge first instead of reaching the next node.
+  function spatialItems() {
+    return state.nodes.map(n => ({ type: 'node', id: n.id, c: nodeCenter(n) }));
+  }
+  function ensureNodeVisible(node) {
+    const rect = canvasWrap.getBoundingClientRect();
+    const pad = 50;
+    const sx = node.x * view.scale + view.x, sy = node.y * view.scale + view.y;
+    const sw = node.w * view.scale, sh = node.h * view.scale;
+    let dx = 0, dy = 0;
+    if (sx < pad) dx = pad - sx;
+    else if (sx + sw > rect.width - pad) dx = (rect.width - pad) - (sx + sw);
+    if (sy < pad) dy = pad - sy;
+    else if (sy + sh > rect.height - pad) dy = (rect.height - pad) - (sy + sh);
+    if (dx || dy) { view.x += dx; view.y += dy; applyViewTransform(); }
+  }
+  function ensureSelectionVisible() {
+    if (selection.type === 'node') {
+      const node = state.nodes.find(n => n.id === selection.id);
+      if (node) ensureNodeVisible(node);
+    } else if (selection.type === 'edge') {
+      const edge = state.edges.find(e => e.id === selection.id);
+      const from = edge && state.nodes.find(n => n.id === edge.from);
+      const to = edge && state.nodes.find(n => n.id === edge.to);
+      if (from && to) {
+        const c1 = nodeCenter(from), c2 = nodeCenter(to);
+        ensureNodeVisible({ x: (c1.x + c2.x) / 2 - 1, y: (c1.y + c2.y) / 2 - 1, w: 2, h: 2 });
+      }
+    }
+  }
+
+  function moveSelectionByArrow(dir) {
+    const items = spatialItems();
+    if (!items.length) return;
+    const current = items.find(it => it.type === selection.type && it.id === selection.id);
+    if (!current) {
+      // Nothing selected (or the selection vanished) — just pick something.
+      selectItem(items[0].type, items[0].id);
+      ensureSelectionVisible();
+      return;
+    }
+    let best = null, bestScore = Infinity;
+    for (const it of items) {
+      if (it === current) continue;
+      const dx = it.c.x - current.c.x, dy = it.c.y - current.c.y;
+      let primary, perp;
+      if (dir === 'right') { if (dx <= 0) continue; primary = dx; perp = dy; }
+      else if (dir === 'left') { if (dx >= 0) continue; primary = -dx; perp = dy; }
+      else if (dir === 'down') { if (dy <= 0) continue; primary = dy; perp = dx; }
+      else { if (dy >= 0) continue; primary = -dy; perp = dx; } // 'up'
+      const score = primary + Math.abs(perp) * 2;
+      if (score < bestScore) { bestScore = score; best = it; }
+    }
+    if (best) { selectItem(best.type, best.id); ensureSelectionVisible(); }
+  }
+
   function updatePanel() {
     if (!selection.type) { propsPanel.hidden = true; return; }
     propsPanel.hidden = false;
@@ -715,7 +776,7 @@
     canvas.classList.toggle('tool-connect', name === 'connect');
     canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond'].includes(name));
     const hints = {
-      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 노드 선택 후 Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
+      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
       circle: '캔버스를 클릭해 원형 노드를 추가하세요.',
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
@@ -918,6 +979,13 @@
     if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelection(); return; }
     if (evt.key === 'Escape') { clearSelection(); setTool('select'); return; }
     if (evt.key === 'Insert' && selection.type === 'node') { evt.preventDefault(); duplicateConnected(selection.id); return; }
+
+    const arrowDirs = { ArrowRight: 'right', ArrowLeft: 'left', ArrowDown: 'down', ArrowUp: 'up' };
+    if (arrowDirs[evt.key] && state.nodes.length > 0) {
+      evt.preventDefault();
+      moveSelectionByArrow(arrowDirs[evt.key]);
+      return;
+    }
 
     const map = { v: 'select', r: 'rect', o: 'circle', d: 'diamond', c: 'connect' };
     const t = map[evt.key.toLowerCase()];
