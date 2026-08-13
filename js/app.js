@@ -102,15 +102,27 @@
   // 접선 방향(ux,uy), 수직 방향(px,py — 곡률·지연 표시·극성 표시 오프셋에 사용).
   function edgeAnchorPoints(edge, from, to) {
     const cFrom = nodeCenter(from), cTo = nodeCenter(to);
-    const p1 = boundaryPoint(from, cTo.x, cTo.y);
-    const p2 = boundaryPoint(to, cFrom.x, cFrom.y);
-    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+    const dxC = cTo.x - cFrom.x, dyC = cTo.y - cFrom.y;
+    const lenC = Math.hypot(dxC, dyC) || 1;
+    const uxC = dxC / lenC, uyC = dyC / lenC;
+    const pxC = -uyC, pyC = uxC;
+    const midC = { x: (cFrom.x + cTo.x) / 2, y: (cFrom.y + cTo.y) / 2 };
+    const bend = edge.bend || 0;
+    const ctrl = { x: midC.x + pxC * bend, y: midC.y + pyC * bend };
+
+    // 경계 접점은 상대 노드의 "중심"이 아니라 곡선의 제어점을 향해 겨냥해서 구한다.
+    // 이렇게 해야 같은 두 노드를 잇는 곡률이 다른(반대로 휜) 연결선이 여러 개 있을 때
+    // 접점이 노드 위 한 점에서 서로 겹치지 않고 곡선이 휘는 방향으로 자연스럽게 벌어진다.
+    // (bend=0이면 ctrl은 두 중심의 중점이 되는데, 그 방향은 상대 중심을 향한 방향과
+    // 같은 직선상에 있으므로 결과는 기존과 동일하다.)
+    const p1 = boundaryPoint(from, ctrl.x, ctrl.y);
+    const p2 = boundaryPoint(to, ctrl.x, ctrl.y);
+
+    // 지연·극성 표시는 실제로 그려지는 곡선의 접선 방향(≈ p2-p1)에 맞춰 놓는다.
     const dx = p2.x - p1.x, dy = p2.y - p1.y;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len, uy = dy / len;
     const px = -uy, py = ux;
-    const bend = edge.bend || 0;
-    const ctrl = { x: mx + px * bend, y: my + py * bend };
     return { p1, p2, ctrl, ux, uy, px, py };
   }
   function bezierPoint(p1, ctrl, p2, t) {
