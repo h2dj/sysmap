@@ -23,6 +23,26 @@
   function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
+  const FONT_STACK = '-apple-system, "Apple SD Gothic Neo", "Segoe UI", Roboto, sans-serif';
+  const NODE_DEFAULT_SIZES = { rect: [150, 90], circle: [110, 110], diamond: [140, 100] };
+  const NODE_DEFAULT_LABELS = { rect: '시스템', circle: '사용자', diamond: '분기', text: '텍스트', loop: 'R1' };
+  const LOOP_ICON = { R: '↻', B: '↺' };
+
+  // 텍스트·루프 노드는 배경 도형이 없어 글자 크기에 딱 맞게 자동으로 커진다.
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  function loopDisplayText(label, loopType) { return `${LOOP_ICON[loopType] || LOOP_ICON.R} ${label || ''}`; }
+  function measureNodeSize(shape, label, loopType) {
+    const isLoop = shape === 'loop';
+    const fontSize = isLoop ? 15 : 13;
+    const fontWeight = isLoop ? 700 : 400;
+    measureCtx.font = `${fontWeight} ${fontSize}px ${FONT_STACK}`;
+    const display = isLoop ? loopDisplayText(label, loopType) : (label || '');
+    const textW = measureCtx.measureText(display || ' ').width;
+    const w = Math.max(30, Math.ceil(textW) + 20);
+    const h = Math.ceil(fontSize * 1.5) + 16;
+    return { w, h };
+  }
+
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
@@ -78,6 +98,29 @@
     return { x: c.x + dx * t, y: c.y + dy * t };
   }
 
+  // 두 노드를 잇는 곡선(2차 베지어) 앵커점 계산: 경계 접점 p1/p2, 제어점 ctrl,
+  // 접선 방향(ux,uy), 수직 방향(px,py — 곡률·지연 표시·극성 표시 오프셋에 사용).
+  function edgeAnchorPoints(edge, from, to) {
+    const cFrom = nodeCenter(from), cTo = nodeCenter(to);
+    const p1 = boundaryPoint(from, cTo.x, cTo.y);
+    const p2 = boundaryPoint(to, cFrom.x, cFrom.y);
+    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const px = -uy, py = ux;
+    const bend = edge.bend || 0;
+    const ctrl = { x: mx + px * bend, y: my + py * bend };
+    return { p1, p2, ctrl, ux, uy, px, py };
+  }
+  function bezierPoint(p1, ctrl, p2, t) {
+    const mt = 1 - t;
+    return {
+      x: mt * mt * p1.x + 2 * mt * t * ctrl.x + t * t * p2.x,
+      y: mt * mt * p1.y + 2 * mt * t * ctrl.y + t * t * p2.y,
+    };
+  }
+
   function screenToWorld(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const lx = clientX - rect.left;
@@ -98,6 +141,17 @@
     for (const n of state.nodes) {
       minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
       maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
+    }
+    // 휘어진 연결선의 제어점도 포함해야 큰 곡선이 화면 맞춤/내보내기에서 잘리지 않는다.
+    // (2차 베지어 곡선은 항상 p1/ctrl/p2 세 점의 볼록 껍질 안에 있음)
+    for (const e of state.edges) {
+      if (!e.bend) continue;
+      const from = state.nodes.find(n => n.id === e.from);
+      const to = state.nodes.find(n => n.id === e.to);
+      if (!from || !to) continue;
+      const { ctrl } = edgeAnchorPoints(e, from, to);
+      minX = Math.min(minX, ctrl.x); minY = Math.min(minY, ctrl.y);
+      maxX = Math.max(maxX, ctrl.x); maxY = Math.max(maxY, ctrl.y);
     }
     return { minX, minY, maxX, maxY };
   }
@@ -184,16 +238,22 @@
   // CRUD
   // ===========================================================================================
   function addNode(shape, worldX, worldY) {
-    const sizes = { rect: [150, 90], circle: [110, 110], diamond: [140, 100] };
-    const [w, h] = sizes[shape] || [150, 90];
-    const labels = { rect: '시스템', circle: '사용자', diamond: '분기' };
-    const node = {
-      id: uid(), shape,
-      x: worldX - w / 2, y: worldY - h / 2, w, h,
-      label: labels[shape] || '노드',
-      fill: cssVar('--node-fill') || '#eef2ff',
-      stroke: cssVar('--node-stroke') || '#4f6df5',
-    };
+    const label = NODE_DEFAULT_LABELS[shape] || '노드';
+    const isTextLike = shape === 'text' || shape === 'loop';
+    let w, h, fill, stroke;
+    const node = { id: uid(), shape, label };
+    if (isTextLike) {
+      if (shape === 'loop') node.loopType = 'R';
+      node.textColor = cssVar('--text') || '#1c2128';
+      ({ w, h } = measureNodeSize(shape, label, node.loopType));
+      fill = 'transparent';
+      stroke = node.textColor;
+    } else {
+      [w, h] = NODE_DEFAULT_SIZES[shape] || [150, 90];
+      fill = cssVar('--node-fill') || '#eef2ff';
+      stroke = cssVar('--node-stroke') || '#4f6df5';
+    }
+    Object.assign(node, { x: worldX - w / 2, y: worldY - h / 2, w, h, fill, stroke });
     state.nodes.push(node);
     render();
     pushHistory();
@@ -205,7 +265,11 @@
     if (fromId === toId) return null;
     const exists = state.edges.some(e => e.from === fromId && e.to === toId);
     if (exists) return null;
-    const edge = { id: uid(), from: fromId, to: toId, label: '', dashed: false, arrowStart: false, arrowEnd: true };
+    const edge = {
+      id: uid(), from: fromId, to: toId, label: '',
+      dashed: false, arrowStart: false, arrowEnd: true,
+      bend: 0, delay: false, polarity: '',
+    };
     state.edges.push(edge);
     render();
     pushHistory();
@@ -236,10 +300,13 @@
       x: spot.x, y: spot.y, w: source.w, h: source.h,
       label: source.label, fill: source.fill, stroke: source.stroke,
     };
+    if (source.loopType) clone.loopType = source.loopType;
+    if (source.textColor) clone.textColor = source.textColor;
     state.nodes.push(clone);
     state.edges.push({
       id: uid(), from: source.id, to: clone.id,
       label: '', dashed: false, arrowStart: false, arrowEnd: true,
+      bend: 0, delay: false, polarity: '',
     });
     selection = { type: 'node', id: clone.id };
     render();
@@ -277,8 +344,17 @@
     updatePanel();
   }
 
+  // 텍스트·루프 노드는 배경 도형이 없다 — 글자만 떠 있는 인과 지도 변수명 표기.
+  function isTextLikeShape(shape) { return shape === 'text' || shape === 'loop'; }
+
   function shapeEl(node) {
     const w = node.w, h = node.h;
+    if (isTextLikeShape(node.shape)) {
+      // 텍스트·루프 노드는 화면에 보이는 도형이 없다. <text>는 pointer-events:none이라
+      // 그것만으로는 클릭·드래그·연결이 전혀 안 걸리므로, 투명한 히트 영역을 깔아준다.
+      // fill:none이 아니라 fill:transparent를 써야 visiblePainted 히트테스트에 걸린다.
+      return svgEl('rect', { x: 0, y: 0, width: w, height: h, fill: 'transparent', stroke: 'none', class: 'node-hit' });
+    }
     let el;
     if (node.shape === 'circle') {
       el = svgEl('ellipse', { cx: w / 2, cy: h / 2, rx: w / 2, ry: h / 2 });
@@ -293,19 +369,39 @@
     return el;
   }
 
+  function nodeDisplayText(node) {
+    return node.shape === 'loop' ? loopDisplayText(node.label, node.loopType) : node.label;
+  }
+
   function buildNodeEl(node) {
     const g = svgEl('g', { class: 'node', 'data-id': node.id, transform: `translate(${node.x} ${node.y})` });
-    g.appendChild(shapeEl(node));
-    const text = svgEl('text', { x: node.w / 2, y: node.h / 2, class: 'node-label' });
-    text.textContent = node.label;
+    const shape = shapeEl(node);
+    if (shape) g.appendChild(shape);
+    const isTextLike = isTextLikeShape(node.shape);
+    const text = svgEl('text', {
+      x: node.w / 2, y: node.h / 2,
+      class: 'node-label' + (node.shape === 'loop' ? ' loop-label' : ''),
+    });
+    // 프레젠테이션 속성(fill=)은 스타일시트의 .node-label 규칙보다 우선순위가
+    // 낮아 덮어써진다 — 인라인 style로 지정해야 커스텀 글자색이 실제로 적용됨.
+    if (isTextLike) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+    text.textContent = nodeDisplayText(node);
     g.appendChild(text);
     if (selection.type === 'node' && selection.id === node.id) {
       g.classList.add('selected');
-      const handle = svgEl('rect', {
-        x: node.w - 8, y: node.h - 8, width: 14, height: 14,
-        class: 'resize-handle', 'data-resize': node.id,
-      });
-      g.appendChild(handle);
+      if (isTextLike) {
+        const box = svgEl('rect', {
+          x: -4, y: -4, width: node.w + 8, height: node.h + 8, rx: 4,
+          class: 'text-select-box',
+        });
+        g.insertBefore(box, g.firstChild);
+      } else {
+        const handle = svgEl('rect', {
+          x: node.w - 8, y: node.h - 8, width: 14, height: 14,
+          class: 'resize-handle', 'data-resize': node.id,
+        });
+        g.appendChild(handle);
+      }
     }
     if (connectPendingId === node.id) g.classList.add('connect-pending');
     return g;
@@ -316,21 +412,42 @@
     const to = state.nodes.find(n => n.id === edge.to);
     const g = svgEl('g', { class: 'edge', 'data-id': edge.id });
     if (!from || !to) return g;
-    const cFrom = nodeCenter(from), cTo = nodeCenter(to);
-    const p1 = boundaryPoint(from, cTo.x, cTo.y);
-    const p2 = boundaryPoint(to, cFrom.x, cFrom.y);
+    const { p1, p2, ctrl, ux, uy, px, py } = edgeAnchorPoints(edge, from, to);
+    const d = `M${p1.x},${p1.y} Q${ctrl.x},${ctrl.y} ${p2.x},${p2.y}`;
 
-    const hit = svgEl('line', { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, class: 'edge-hit' });
-    const line = svgEl('line', { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, class: 'edge-line' });
+    const hit = svgEl('path', { d, class: 'edge-hit' });
+    const line = svgEl('path', { d, class: 'edge-line' });
     if (edge.dashed) line.setAttribute('stroke-dasharray', '7 5');
     if (edge.arrowEnd) line.setAttribute('marker-end', 'url(#arrowHead)');
     if (edge.arrowStart) line.setAttribute('marker-start', 'url(#arrowHead)');
     g.appendChild(hit);
     g.appendChild(line);
 
+    // 인과 지도 표기: 지연 표시(‖, 곡선 중앙을 가로지르는 두 짧은 선)
+    if (edge.delay) {
+      const mid = bezierPoint(p1, ctrl, p2, 0.5);
+      const tickLen = 9, gap = 4;
+      for (const off of [-gap, gap]) {
+        const bx = mid.x + ux * off, by = mid.y + uy * off;
+        g.appendChild(svgEl('line', {
+          x1: bx - px * tickLen / 2, y1: by - py * tickLen / 2,
+          x2: bx + px * tickLen / 2, y2: by + py * tickLen / 2,
+          class: 'edge-delay-mark',
+        }));
+      }
+    }
+
+    // 극성 표시(+/-): 화살촉 쪽에 가깝게, 선 옆으로 살짝 띄워서 표시
+    if (edge.polarity) {
+      const q = bezierPoint(p1, ctrl, p2, 0.78);
+      const label = svgEl('text', { x: q.x + px * 11, y: q.y + py * 11, class: 'edge-polarity' });
+      label.textContent = edge.polarity;
+      g.appendChild(label);
+    }
+
     if (edge.label) {
-      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
-      const text = svgEl('text', { x: mx, y: my, class: 'edge-label' });
+      const mid = bezierPoint(p1, ctrl, p2, 0.5);
+      const text = svgEl('text', { x: mid.x, y: mid.y, class: 'edge-label' });
       text.textContent = edge.label;
       g.appendChild(text);
       // measure after insertion into live DOM for accurate bbox
@@ -345,7 +462,15 @@
         } catch (e) { /* not yet laid out */ }
       });
     }
-    if (selection.type === 'edge' && selection.id === edge.id) g.classList.add('selected');
+    if (selection.type === 'edge' && selection.id === edge.id) {
+      g.classList.add('selected');
+      if (tool === 'select') {
+        const handle = svgEl('circle', {
+          cx: ctrl.x, cy: ctrl.y, r: 6, class: 'bend-handle', 'data-bend': edge.id,
+        });
+        g.appendChild(handle);
+      }
+    }
     return g;
   }
 
@@ -444,48 +569,100 @@
     else renderEdgePanel();
   }
 
+  // 노드 모양을 바꿀 때 가운데 위치는 유지한 채 크기를 새 모양에 맞게 조정.
+  function convertNodeShape(node, newShape) {
+    const wasTextLike = isTextLikeShape(node.shape);
+    const c = nodeCenter(node);
+    node.shape = newShape;
+    if (isTextLikeShape(newShape)) {
+      if (newShape === 'loop' && !node.loopType) node.loopType = 'R';
+      if (!node.textColor) node.textColor = cssVar('--text') || '#1c2128';
+      const size = measureNodeSize(newShape, node.label, node.loopType);
+      node.w = size.w; node.h = size.h;
+    } else {
+      const [w, h] = NODE_DEFAULT_SIZES[newShape] || [150, 90];
+      node.w = w; node.h = h;
+      // fill/stroke는 텍스트 노드였을 때 "글자색" 용도로 쓰였을 수 있으므로
+      // (값이 있어도) 도형으로 바뀌는 경우엔 항상 기본 배색으로 되돌린다.
+      if (wasTextLike || !node.fill || node.fill === 'transparent') node.fill = cssVar('--node-fill') || '#eef2ff';
+      if (wasTextLike || !node.stroke) node.stroke = cssVar('--node-stroke') || '#4f6df5';
+    }
+    node.x = c.x - node.w / 2;
+    node.y = c.y - node.h / 2;
+  }
+
   function renderNodePanel() {
     const node = state.nodes.find(n => n.id === selection.id);
     if (!node) { clearSelection(); return; }
     panelTitle.textContent = '노드 속성';
     panelBody.innerHTML = '';
+    const isTextLike = isTextLikeShape(node.shape);
 
-    panelBody.appendChild(field('이름', () => {
+    panelBody.appendChild(field(node.shape === 'loop' ? '루프 이름 (예: R1, B2)' : '이름', () => {
       const input = document.createElement('input');
       input.type = 'text'; input.value = node.label;
-      input.addEventListener('input', () => { node.label = input.value; updateNodeLabel(node); });
+      if (node.shape === 'loop') input.placeholder = '예: R1';
+      input.addEventListener('input', () => { setNodeLabel(node, input.value); patchNodeVisual(node); });
       input.addEventListener('change', () => pushHistory());
       return input;
     }));
 
     panelBody.appendChild(field('모양', () => {
       const sel = document.createElement('select');
-      [['rect', '사각형'], ['circle', '원'], ['diamond', '마름모']].forEach(([v, l]) => {
+      [['rect', '사각형'], ['circle', '원'], ['diamond', '마름모'], ['text', '텍스트'], ['loop', '루프 라벨 (R/B)']].forEach(([v, l]) => {
         const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
         if (node.shape === v) opt.selected = true;
         sel.appendChild(opt);
       });
-      sel.addEventListener('change', () => { node.shape = sel.value; render(); pushHistory(); });
+      sel.addEventListener('change', () => { convertNodeShape(node, sel.value); render(); pushHistory(); });
       return sel;
     }));
 
-    const row = document.createElement('div');
-    row.className = 'row2';
-    row.appendChild(field('채우기 색', () => {
-      const input = document.createElement('input');
-      input.type = 'color'; input.value = toHex(node.fill);
-      input.addEventListener('input', () => { node.fill = input.value; render(); });
-      input.addEventListener('change', () => pushHistory());
-      return input;
-    }));
-    row.appendChild(field('테두리 색', () => {
-      const input = document.createElement('input');
-      input.type = 'color'; input.value = toHex(node.stroke);
-      input.addEventListener('input', () => { node.stroke = input.value; render(); });
-      input.addEventListener('change', () => pushHistory());
-      return input;
-    }));
-    panelBody.appendChild(row);
+    if (node.shape === 'loop') {
+      panelBody.appendChild(field('루프 유형', () => {
+        const sel = document.createElement('select');
+        [['R', 'R · 강화(Reinforcing) ↻'], ['B', 'B · 균형(Balancing) ↺']].forEach(([v, l]) => {
+          const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
+          if ((node.loopType || 'R') === v) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener('change', () => {
+          node.loopType = sel.value;
+          setNodeLabel(node, node.label);
+          patchNodeVisual(node);
+          pushHistory();
+        });
+        return sel;
+      }));
+    }
+
+    if (isTextLike) {
+      panelBody.appendChild(field('글자 색', () => {
+        const input = document.createElement('input');
+        input.type = 'color'; input.value = toHex(node.textColor || cssVar('--text') || '#1c2128');
+        input.addEventListener('input', () => { node.textColor = input.value; patchNodeVisual(node); });
+        input.addEventListener('change', () => pushHistory());
+        return input;
+      }));
+    } else {
+      const row = document.createElement('div');
+      row.className = 'row2';
+      row.appendChild(field('채우기 색', () => {
+        const input = document.createElement('input');
+        input.type = 'color'; input.value = toHex(node.fill);
+        input.addEventListener('input', () => { node.fill = input.value; render(); });
+        input.addEventListener('change', () => pushHistory());
+        return input;
+      }));
+      row.appendChild(field('테두리 색', () => {
+        const input = document.createElement('input');
+        input.type = 'color'; input.value = toHex(node.stroke);
+        input.addEventListener('input', () => { node.stroke = input.value; render(); });
+        input.addEventListener('change', () => pushHistory());
+        return input;
+      }));
+      panelBody.appendChild(row);
+    }
 
     const delBtn = document.createElement('button');
     delBtn.className = 'danger-btn';
@@ -536,6 +713,42 @@
       return sel;
     }));
 
+    // 인과 지도(causal loop diagram) 표기용 극성·지연 표시
+    panelBody.appendChild(field('극성 (인과 지도)', () => {
+      const sel = document.createElement('select');
+      [['', '표시 안 함'], ['+', '+ (같은 방향)'], ['-', '− (반대 방향)']].forEach(([v, l]) => {
+        const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
+        if ((edge.polarity || '') === v) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', () => { edge.polarity = sel.value; render(); pushHistory(); });
+      return sel;
+    }));
+
+    panelBody.appendChild(field('지연 표시', () => {
+      const sel = document.createElement('select');
+      [['no', '표시 안 함'], ['yes', '지연 있음 (‖)']].forEach(([v, l]) => {
+        const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
+        if ((edge.delay ? 'yes' : 'no') === v) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', () => { edge.delay = sel.value === 'yes'; render(); pushHistory(); });
+      return sel;
+    }));
+
+    if (edge.bend) {
+      const resetBtn = document.createElement('button');
+      resetBtn.className = 'btn';
+      resetBtn.textContent = '직선으로 펴기';
+      resetBtn.addEventListener('click', () => { edge.bend = 0; render(); pushHistory(); });
+      panelBody.appendChild(resetBtn);
+    }
+
+    const hintP = document.createElement('p');
+    hintP.style.cssText = 'font-size:12px;color:var(--text-muted);margin:0;';
+    hintP.textContent = '연결선을 캔버스에서 선택하면 가운데 손잡이를 드래그해 곡률을 조절할 수 있습니다.';
+    panelBody.appendChild(hintP);
+
     const delBtn = document.createElement('button');
     delBtn.className = 'danger-btn';
     delBtn.textContent = '이 연결선 삭제';
@@ -565,12 +778,34 @@
     return '#' + rgb.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
   }
 
-  function updateNodeLabel(node) {
+  // 텍스트·루프 노드는 글자가 바뀌면 박스 크기(가운데 정렬 유지)도 다시 잰다.
+  function setNodeLabel(node, text) {
+    node.label = text;
+    if (isTextLikeShape(node.shape)) {
+      const c = nodeCenter(node);
+      const { w, h } = measureNodeSize(node.shape, node.label, node.loopType);
+      node.w = w; node.h = h;
+      node.x = c.x - w / 2; node.y = c.y - h / 2;
+    }
+  }
+
+  // 속성 패널의 입력창은 SVG 밖에 있으므로, 매 타이핑마다 render()로 패널까지
+  // 통째로 다시 그리면 입력 포커스가 끊긴다 — SVG 쪽만 가볍게 갱신한다.
+  function patchNodeVisual(node) {
     const g = nodesLayer.querySelector(`.node[data-id="${node.id}"]`);
     if (g) {
-      const t = g.querySelector('.node-label');
-      if (t) t.textContent = node.label;
+      g.setAttribute('transform', `translate(${node.x} ${node.y})`);
+      const text = g.querySelector('.node-label');
+      if (text) {
+        text.setAttribute('x', node.w / 2);
+        text.setAttribute('y', node.h / 2);
+        text.textContent = nodeDisplayText(node);
+        if (isTextLikeShape(node.shape)) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+      }
+      const box = g.querySelector('.text-select-box');
+      if (box) setAttrs(box, { x: -4, y: -4, width: node.w + 8, height: node.h + 8 });
     }
+    updateEdgesTouching(node.id);
   }
 
   // ===========================================================================================
@@ -583,7 +818,7 @@
       if (!node) return;
       worldRect = { x: node.x, y: node.y, w: node.w, h: node.h };
       currentText = node.label;
-      commit = (val) => { node.label = val; render(); pushHistory(); };
+      commit = (val) => { setNodeLabel(node, val); render(); pushHistory(); };
     } else {
       const edge = state.edges.find(e => e.id === id);
       if (!edge) return;
@@ -646,13 +881,17 @@
     evt.preventDefault();
     const target = evt.target;
     const resizeHandle = target.closest && target.closest('[data-resize]');
+    const bendHandle = target.closest && target.closest('[data-bend]');
     const nodeGroup = target.closest && target.closest('.node');
     const edgeGroup = target.closest && target.closest('.edge');
     const world = worldFromEvent(evt);
 
-    if (['rect', 'circle', 'diamond'].includes(tool)) {
-      addNode(tool, world.x, world.y);
+    if (['rect', 'circle', 'diamond', 'text', 'loop'].includes(tool)) {
+      const placedShape = tool;
+      const created = addNode(placedShape, world.x, world.y);
       setTool('select');
+      // 텍스트·루프 노드는 놓자마자 라벨을 입력하도록 바로 편집 모드로 진입.
+      if (placedShape === 'text' || placedShape === 'loop') startInlineEdit('node', created.id);
       return;
     }
 
@@ -682,6 +921,17 @@
       const node = state.nodes.find(n => n.id === resizeHandle.dataset.resize);
       if (!node) return;
       drag = { type: 'resize', id: node.id, startW: node.w, startH: node.h, startWorld: world };
+      canvas.setPointerCapture(evt.pointerId);
+      return;
+    }
+    if (bendHandle) {
+      const edge = state.edges.find(e => e.id === bendHandle.dataset.bend);
+      const from = edge && state.nodes.find(n => n.id === edge.from);
+      const to = edge && state.nodes.find(n => n.id === edge.to);
+      if (!edge || !from || !to) return;
+      const { p1, p2, px, py } = edgeAnchorPoints(edge, from, to);
+      const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      drag = { type: 'bend', id: edge.id, mid, perp: { x: px, y: py } };
       canvas.setPointerCapture(evt.pointerId);
       return;
     }
@@ -738,16 +988,28 @@
         if (handle) { handle.setAttribute('x', node.w - 8); handle.setAttribute('y', node.h - 8); }
       }
       updateEdgesTouching(node.id);
+    } else if (drag.type === 'bend') {
+      const edge = state.edges.find(e => e.id === drag.id);
+      if (!edge) return;
+      const world = worldFromEvent(evt);
+      const relX = world.x - drag.mid.x, relY = world.y - drag.mid.y;
+      edge.bend = relX * drag.perp.x + relY * drag.perp.y;
+      const el = edgesLayer.querySelector(`.edge[data-id="${edge.id}"]`);
+      if (el) el.replaceWith(buildEdgeEl(edge));
     }
   });
 
   function endDrag(evt) {
     if (!drag) return;
-    const wasStructural = drag.type === 'move' || drag.type === 'resize';
+    const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'bend';
+    const wasBend = drag.type === 'bend';
     canvas.classList.remove('panning');
     try { canvas.releasePointerCapture(evt.pointerId); } catch (e) {}
     drag = null;
     if (wasStructural) pushHistory();
+    // 곡률을 드래그하는 동안은 패널을 건드리지 않다가, 끝나면 "직선으로 펴기"
+    // 버튼이 새 bend 값에 맞춰 나타나도록 패널을 갱신한다.
+    if (wasBend) updatePanel();
   }
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
@@ -774,13 +1036,15 @@
       btn.setAttribute('aria-pressed', String(btn.dataset.tool === name));
     });
     canvas.classList.toggle('tool-connect', name === 'connect');
-    canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond'].includes(name));
+    canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond', 'text', 'loop'].includes(name));
     const hints = {
       select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
       circle: '캔버스를 클릭해 원형 노드를 추가하세요.',
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
-      connect: '연결할 시작 노드를 클릭한 다음 도착 노드를 클릭하세요. (Esc로 취소)',
+      text: '캔버스를 클릭해 테두리 없는 텍스트 노드를 추가하세요. 인과 지도의 변수명 표기에 적합합니다.',
+      loop: '캔버스를 클릭해 루프 라벨(R11, B7 등)을 추가하세요. 속성 패널에서 강화(R)/균형(B)을 선택할 수 있습니다.',
+      connect: '연결할 시작 노드를 클릭한 다음 도착 노드를 클릭하세요. 선택 후 가운데 손잡이를 드래그하면 곡선으로 휘어집니다. (Esc로 취소)',
     };
     hintEl.textContent = hints[name] || hints.select;
     render();
@@ -882,6 +1146,11 @@
     clone.querySelectorAll('.ui-only').forEach(el => el.remove());
     clone.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
     clone.querySelectorAll('[data-resize]').forEach(el => el.remove());
+    clone.querySelectorAll('[data-bend]').forEach(el => el.remove());
+    clone.querySelectorAll('.text-select-box').forEach(el => el.remove());
+    // 클릭 판정용 투명 히트 영역들 — 정적 내보내기에는 필요 없고, 남겨두면
+    // 스타일시트 없이 브라우저 기본값(fill:black)으로 그려져 시커멓게 보인다.
+    clone.querySelectorAll('.edge-hit, .node-hit').forEach(el => el.remove());
     const bg = cssVar('--bg') || '#ffffff';
     const textColor = cssVar('--text') || '#1c2128';
     const edgeColor = cssVar('--edge-color') || '#5b6472';
@@ -893,9 +1162,12 @@
     style.textContent = `
       text { font-family: -apple-system, "Apple SD Gothic Neo", "Segoe UI", Roboto, sans-serif; }
       .node-label { fill: ${textColor}; font-size: 13px; text-anchor: middle; dominant-baseline: central; }
+      .node-label.loop-label { font-size: 15px; font-weight: 700; }
       .edge-line { stroke: ${edgeColor}; stroke-width: 2; fill: none; }
       .edge-label { fill: ${textColor}; font-size: 11.5px; text-anchor: middle; dominant-baseline: central; }
       .edge-label-bg { fill: ${bg}; opacity: 0.92; }
+      .edge-delay-mark { stroke: ${edgeColor}; stroke-width: 2; }
+      .edge-polarity { fill: ${edgeColor}; font-size: 13px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
       rect.bgrect { fill: ${bg}; }
     `;
     clone.insertBefore(style, clone.firstChild);
@@ -987,7 +1259,7 @@
       return;
     }
 
-    const map = { v: 'select', r: 'rect', o: 'circle', d: 'diamond', c: 'connect' };
+    const map = { v: 'select', r: 'rect', o: 'circle', d: 'diamond', t: 'text', l: 'loop', c: 'connect' };
     const t = map[evt.key.toLowerCase()];
     if (t) setTool(t);
     if (evt.key === '+' || evt.key === '=') zoomBy(1.2);

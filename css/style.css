@@ -292,6 +292,20 @@ body {
   stroke-width: 1.5;
   cursor: nwse-resize;
 }
+/* 텍스트·루프 노드의 투명 히트 영역 (클릭·드래그·연결을 받기 위함) */
+.node-hit { cursor: move; }
+/* 텍스트·루프 노드: 배경 도형이 없어 selection 표시를 위한 점선 박스 */
+.text-select-box {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+.node-label.loop-label {
+  font-size: 15px;
+  font-weight: 700;
+}
 
 .edge-line {
   stroke: var(--edge-color);
@@ -322,6 +336,27 @@ body {
   pointer-events: none;
   user-select: none;
 }
+/* 인과 지도 표기: 지연 표시(=)와 극성 표시(+/-) */
+.edge-delay-mark {
+  stroke: var(--edge-color);
+  stroke-width: 2;
+}
+.edge-polarity {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--edge-color);
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
+}
+.bend-handle {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  cursor: grab;
+}
+.bend-handle:active { cursor: grabbing; }
 .pending-line {
   stroke: var(--danger);
   stroke-width: 2;
