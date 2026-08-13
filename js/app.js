@@ -24,8 +24,13 @@
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
   const FONT_STACK = '-apple-system, "Apple SD Gothic Neo", "Segoe UI", Roboto, sans-serif';
-  const NODE_DEFAULT_SIZES = { rect: [150, 90], circle: [110, 110], diamond: [140, 100] };
-  const NODE_DEFAULT_LABELS = { rect: '시스템', circle: '사용자', diamond: '분기', text: '텍스트', loop: 'R1' };
+  const NODE_DEFAULT_SIZES = { rect: [150, 90], circle: [110, 110], diamond: [140, 100], bubble: [180, 120] };
+  const NODE_DEFAULT_LABELS = { rect: '시스템', circle: '사용자', diamond: '분기', text: '텍스트', loop: 'R1', bubble: '말풍선' };
+  // 말풍선(주석용 회색 노드)은 사각형/원/마름모와 다른 기본 배색을 쓴다.
+  function defaultFillStroke(shape) {
+    if (shape === 'bubble') return { fill: cssVar('--bubble-fill') || '#e3e3e9', stroke: cssVar('--bubble-stroke') || '#8b8b96' };
+    return { fill: cssVar('--node-fill') || '#eef2ff', stroke: cssVar('--node-stroke') || '#4f6df5' };
+  }
   const LOOP_ICON = { R: '↻', B: '↺' };
 
   // 텍스트·루프 노드는 배경 도형이 없어 글자 크기에 딱 맞게 자동으로 커진다.
@@ -87,7 +92,7 @@
     if (dx === 0 && dy === 0) dx = 1;
     const hw = node.w / 2, hh = node.h / 2;
     let t;
-    if (node.shape === 'circle') {
+    if (node.shape === 'circle' || node.shape === 'bubble') {
       t = 1 / Math.sqrt((dx / hw) ** 2 + (dy / hh) ** 2);
     } else if (node.shape === 'diamond') {
       t = 1 / (Math.abs(dx) / hw + Math.abs(dy) / hh);
@@ -262,8 +267,7 @@
       stroke = node.textColor;
     } else {
       [w, h] = NODE_DEFAULT_SIZES[shape] || [150, 90];
-      fill = cssVar('--node-fill') || '#eef2ff';
-      stroke = cssVar('--node-stroke') || '#4f6df5';
+      ({ fill, stroke } = defaultFillStroke(shape));
     }
     Object.assign(node, { x: worldX - w / 2, y: worldY - h / 2, w, h, fill, stroke });
     state.nodes.push(node);
@@ -280,7 +284,7 @@
     const edge = {
       id: uid(), from: fromId, to: toId, label: '',
       dashed: false, arrowStart: false, arrowEnd: true,
-      bend: 0, delay: false, polarity: '',
+      bend: 0, delay: false, polarity: '', bubble: false,
     };
     state.edges.push(edge);
     render();
@@ -318,7 +322,7 @@
     state.edges.push({
       id: uid(), from: source.id, to: clone.id,
       label: '', dashed: false, arrowStart: false, arrowEnd: true,
-      bend: 0, delay: false, polarity: '',
+      bend: 0, delay: false, polarity: '', bubble: false,
     });
     selection = { type: 'node', id: clone.id };
     render();
@@ -368,7 +372,7 @@
       return svgEl('rect', { x: 0, y: 0, width: w, height: h, fill: 'transparent', stroke: 'none', class: 'node-hit' });
     }
     let el;
-    if (node.shape === 'circle') {
+    if (node.shape === 'circle' || node.shape === 'bubble') {
       el = svgEl('ellipse', { cx: w / 2, cy: h / 2, rx: w / 2, ry: h / 2 });
     } else if (node.shape === 'diamond') {
       el = svgEl('path', { d: `M${w / 2},0 L${w},${h / 2} L${w / 2},${h} L0,${h / 2} Z` });
@@ -427,34 +431,48 @@
     const { p1, p2, ctrl, ux, uy, px, py } = edgeAnchorPoints(edge, from, to);
     const d = `M${p1.x},${p1.y} Q${ctrl.x},${ctrl.y} ${p2.x},${p2.y}`;
 
+    // 클릭·드래그·연결선 선택을 위한 히트 영역은 말풍선 꼬리에도 그대로 필요.
     const hit = svgEl('path', { d, class: 'edge-hit' });
-    const line = svgEl('path', { d, class: 'edge-line' });
-    if (edge.dashed) line.setAttribute('stroke-dasharray', '7 5');
-    if (edge.arrowEnd) line.setAttribute('marker-end', 'url(#arrowHead)');
-    if (edge.arrowStart) line.setAttribute('marker-start', 'url(#arrowHead)');
     g.appendChild(hit);
-    g.appendChild(line);
 
-    // 인과 지도 표기: 지연 표시(‖, 곡선 중앙을 가로지르는 두 짧은 선)
-    if (edge.delay) {
-      const mid = bezierPoint(p1, ctrl, p2, 0.5);
-      const tickLen = 9, gap = 4;
-      for (const off of [-gap, gap]) {
-        const bx = mid.x + ux * off, by = mid.y + uy * off;
-        g.appendChild(svgEl('line', {
-          x1: bx - px * tickLen / 2, y1: by - py * tickLen / 2,
-          x2: bx + px * tickLen / 2, y2: by + py * tickLen / 2,
-          class: 'edge-delay-mark',
-        }));
+    if (edge.bubble) {
+      // 말풍선 꼬리: 화살표 대신 시작점 쪽은 작고 끝점(말풍선) 쪽으로 갈수록
+      // 커지는 점들을 곡선을 따라 늘어놓는다 — 화살표/지연/극성 표시는 쓰지 않는다.
+      const dotCount = 5;
+      for (let i = 1; i <= dotCount; i++) {
+        const t = i / (dotCount + 1);
+        const pt = bezierPoint(p1, ctrl, p2, t);
+        const r = 1.8 + t * 5.2;
+        g.appendChild(svgEl('circle', { cx: pt.x, cy: pt.y, r, class: 'edge-bubble-dot' }));
       }
-    }
+    } else {
+      const line = svgEl('path', { d, class: 'edge-line' });
+      if (edge.dashed) line.setAttribute('stroke-dasharray', '7 5');
+      if (edge.arrowEnd) line.setAttribute('marker-end', 'url(#arrowHead)');
+      if (edge.arrowStart) line.setAttribute('marker-start', 'url(#arrowHead)');
+      g.appendChild(line);
 
-    // 극성 표시(+/-): 화살촉 쪽에 가깝게, 선 옆으로 살짝 띄워서 표시
-    if (edge.polarity) {
-      const q = bezierPoint(p1, ctrl, p2, 0.78);
-      const label = svgEl('text', { x: q.x + px * 11, y: q.y + py * 11, class: 'edge-polarity' });
-      label.textContent = edge.polarity;
-      g.appendChild(label);
+      // 인과 지도 표기: 지연 표시(‖, 곡선 중앙을 가로지르는 두 짧은 선)
+      if (edge.delay) {
+        const mid = bezierPoint(p1, ctrl, p2, 0.5);
+        const tickLen = 9, gap = 4;
+        for (const off of [-gap, gap]) {
+          const bx = mid.x + ux * off, by = mid.y + uy * off;
+          g.appendChild(svgEl('line', {
+            x1: bx - px * tickLen / 2, y1: by - py * tickLen / 2,
+            x2: bx + px * tickLen / 2, y2: by + py * tickLen / 2,
+            class: 'edge-delay-mark',
+          }));
+        }
+      }
+
+      // 극성 표시(+/-): 화살촉 쪽에 가깝게, 선 옆으로 살짝 띄워서 표시
+      if (edge.polarity) {
+        const q = bezierPoint(p1, ctrl, p2, 0.78);
+        const label = svgEl('text', { x: q.x + px * 11, y: q.y + py * 11, class: 'edge-polarity' });
+        label.textContent = edge.polarity;
+        g.appendChild(label);
+      }
     }
 
     if (edge.label) {
@@ -596,8 +614,12 @@
       node.w = w; node.h = h;
       // fill/stroke는 텍스트 노드였을 때 "글자색" 용도로 쓰였을 수 있으므로
       // (값이 있어도) 도형으로 바뀌는 경우엔 항상 기본 배색으로 되돌린다.
-      if (wasTextLike || !node.fill || node.fill === 'transparent') node.fill = cssVar('--node-fill') || '#eef2ff';
-      if (wasTextLike || !node.stroke) node.stroke = cssVar('--node-stroke') || '#4f6df5';
+      if (wasTextLike || !node.fill || node.fill === 'transparent') {
+        node.fill = defaultFillStroke(newShape).fill;
+      }
+      if (wasTextLike || !node.stroke) {
+        node.stroke = defaultFillStroke(newShape).stroke;
+      }
     }
     node.x = c.x - node.w / 2;
     node.y = c.y - node.h / 2;
@@ -621,7 +643,7 @@
 
     panelBody.appendChild(field('모양', () => {
       const sel = document.createElement('select');
-      [['rect', '사각형'], ['circle', '원'], ['diamond', '마름모'], ['text', '텍스트'], ['loop', '루프 라벨 (R/B)']].forEach(([v, l]) => {
+      [['rect', '사각형'], ['circle', '원'], ['diamond', '마름모'], ['text', '텍스트'], ['loop', '루프 라벨 (R/B)'], ['bubble', '말풍선']].forEach(([v, l]) => {
         const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
         if (node.shape === v) opt.selected = true;
         sel.appendChild(opt);
@@ -700,53 +722,61 @@
 
     panelBody.appendChild(field('선 스타일', () => {
       const sel = document.createElement('select');
-      [['solid', '실선'], ['dashed', '파선']].forEach(([v, l]) => {
-        const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
-        if ((edge.dashed ? 'dashed' : 'solid') === v) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      sel.addEventListener('change', () => { edge.dashed = sel.value === 'dashed'; render(); pushHistory(); });
-      return sel;
-    }));
-
-    panelBody.appendChild(field('화살표', () => {
-      const sel = document.createElement('select');
-      const cur = edge.arrowStart && edge.arrowEnd ? 'both' : edge.arrowEnd ? 'end' : edge.arrowStart ? 'start' : 'none';
-      [['end', '단방향 →'], ['both', '양방향 ↔'], ['none', '없음 —']].forEach(([v, l]) => {
+      const cur = edge.bubble ? 'bubble' : (edge.dashed ? 'dashed' : 'solid');
+      [['solid', '실선'], ['dashed', '파선'], ['bubble', '말풍선 꼬리 (⋯○)']].forEach(([v, l]) => {
         const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
         if (cur === v) opt.selected = true;
         sel.appendChild(opt);
       });
       sel.addEventListener('change', () => {
-        edge.arrowEnd = sel.value === 'end' || sel.value === 'both';
-        edge.arrowStart = sel.value === 'both';
+        edge.bubble = sel.value === 'bubble';
+        edge.dashed = sel.value === 'dashed';
         render(); pushHistory();
       });
       return sel;
     }));
 
-    // 인과 지도(causal loop diagram) 표기용 극성·지연 표시
-    panelBody.appendChild(field('극성 (인과 지도)', () => {
-      const sel = document.createElement('select');
-      [['', '표시 안 함'], ['+', '+ (같은 방향)'], ['-', '− (반대 방향)']].forEach(([v, l]) => {
-        const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
-        if ((edge.polarity || '') === v) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      sel.addEventListener('change', () => { edge.polarity = sel.value; render(); pushHistory(); });
-      return sel;
-    }));
+    // 말풍선 꼬리는 화살표·극성·지연 표시를 쓰지 않는다 (점만 커지며 이어짐).
+    if (!edge.bubble) {
+      panelBody.appendChild(field('화살표', () => {
+        const sel = document.createElement('select');
+        const cur = edge.arrowStart && edge.arrowEnd ? 'both' : edge.arrowEnd ? 'end' : edge.arrowStart ? 'start' : 'none';
+        [['end', '단방향 →'], ['both', '양방향 ↔'], ['none', '없음 —']].forEach(([v, l]) => {
+          const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
+          if (cur === v) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener('change', () => {
+          edge.arrowEnd = sel.value === 'end' || sel.value === 'both';
+          edge.arrowStart = sel.value === 'both';
+          render(); pushHistory();
+        });
+        return sel;
+      }));
 
-    panelBody.appendChild(field('지연 표시', () => {
-      const sel = document.createElement('select');
-      [['no', '표시 안 함'], ['yes', '지연 있음 (‖)']].forEach(([v, l]) => {
-        const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
-        if ((edge.delay ? 'yes' : 'no') === v) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      sel.addEventListener('change', () => { edge.delay = sel.value === 'yes'; render(); pushHistory(); });
-      return sel;
-    }));
+      // 인과 지도(causal loop diagram) 표기용 극성·지연 표시
+      panelBody.appendChild(field('극성 (인과 지도)', () => {
+        const sel = document.createElement('select');
+        [['', '표시 안 함'], ['+', '+ (같은 방향)'], ['-', '− (반대 방향)']].forEach(([v, l]) => {
+          const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
+          if ((edge.polarity || '') === v) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener('change', () => { edge.polarity = sel.value; render(); pushHistory(); });
+        return sel;
+      }));
+
+      panelBody.appendChild(field('지연 표시', () => {
+        const sel = document.createElement('select');
+        [['no', '표시 안 함'], ['yes', '지연 있음 (‖)']].forEach(([v, l]) => {
+          const opt = document.createElement('option'); opt.value = v; opt.textContent = l;
+          if ((edge.delay ? 'yes' : 'no') === v) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener('change', () => { edge.delay = sel.value === 'yes'; render(); pushHistory(); });
+        return sel;
+      }));
+    }
 
     if (edge.bend) {
       const resetBtn = document.createElement('button');
@@ -898,12 +928,12 @@
     const edgeGroup = target.closest && target.closest('.edge');
     const world = worldFromEvent(evt);
 
-    if (['rect', 'circle', 'diamond', 'text', 'loop'].includes(tool)) {
+    if (['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'].includes(tool)) {
       const placedShape = tool;
       const created = addNode(placedShape, world.x, world.y);
       setTool('select');
-      // 텍스트·루프 노드는 놓자마자 라벨을 입력하도록 바로 편집 모드로 진입.
-      if (placedShape === 'text' || placedShape === 'loop') startInlineEdit('node', created.id);
+      // 텍스트·루프·말풍선 노드는 놓자마자 라벨을 입력하도록 바로 편집 모드로 진입.
+      if (placedShape === 'text' || placedShape === 'loop' || placedShape === 'bubble') startInlineEdit('node', created.id);
       return;
     }
 
@@ -1048,7 +1078,7 @@
       btn.setAttribute('aria-pressed', String(btn.dataset.tool === name));
     });
     canvas.classList.toggle('tool-connect', name === 'connect');
-    canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond', 'text', 'loop'].includes(name));
+    canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'].includes(name));
     const hints = {
       select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
@@ -1056,6 +1086,7 @@
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
       text: '캔버스를 클릭해 테두리 없는 텍스트 노드를 추가하세요. 인과 지도의 변수명 표기에 적합합니다.',
       loop: '캔버스를 클릭해 루프 라벨(R11, B7 등)을 추가하세요. 속성 패널에서 강화(R)/균형(B)을 선택할 수 있습니다.',
+      bubble: '캔버스를 클릭해 말풍선(회색 주석 노드)을 추가하세요. 연결선을 "말풍선 꼬리" 스타일로 설정하면 화살표 대신 점점 커지는 점으로 이어집니다.',
       connect: '연결할 시작 노드를 클릭한 다음 도착 노드를 클릭하세요. 선택 후 가운데 손잡이를 드래그하면 곡선으로 휘어집니다. (Esc로 취소)',
     };
     hintEl.textContent = hints[name] || hints.select;
@@ -1166,6 +1197,7 @@
     const bg = cssVar('--bg') || '#ffffff';
     const textColor = cssVar('--text') || '#1c2128';
     const edgeColor = cssVar('--edge-color') || '#5b6472';
+    const textMuted = cssVar('--text-muted') || '#6b7280';
     setAttrs(clone, { width: w, height: h, viewBox: `${x} ${y} ${w} ${h}` });
     clone.querySelector('#viewport').removeAttribute('transform');
     clone.style.background = bg;
@@ -1180,6 +1212,7 @@
       .edge-label-bg { fill: ${bg}; opacity: 0.92; }
       .edge-delay-mark { stroke: ${edgeColor}; stroke-width: 2; }
       .edge-polarity { fill: ${edgeColor}; font-size: 13px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+      .edge-bubble-dot { fill: ${textMuted}; }
       rect.bgrect { fill: ${bg}; }
     `;
     clone.insertBefore(style, clone.firstChild);
@@ -1271,7 +1304,7 @@
       return;
     }
 
-    const map = { v: 'select', r: 'rect', o: 'circle', d: 'diamond', t: 'text', l: 'loop', c: 'connect' };
+    const map = { v: 'select', r: 'rect', o: 'circle', d: 'diamond', t: 'text', l: 'loop', b: 'bubble', c: 'connect' };
     const t = map[evt.key.toLowerCase()];
     if (t) setTool(t);
     if (evt.key === '+' || evt.key === '=') zoomBy(1.2);

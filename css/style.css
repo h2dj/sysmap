@@ -11,6 +11,8 @@
   --danger: #e0553f;
   --node-fill: #eef2ff;
   --node-stroke: #4f6df5;
+  --bubble-fill: #e3e3e9;
+  --bubble-stroke: #8b8b96;
   --edge-color: #5b6472;
   --grid-dot: #d8dce2;
   --shadow: 0 2px 10px rgba(20, 24, 33, 0.08);
@@ -30,6 +32,8 @@
     --danger: #ff7a63;
     --node-fill: #232a44;
     --node-stroke: #7c93ff;
+    --bubble-fill: #383a44;
+    --bubble-stroke: #7c7c8a;
     --edge-color: #a7afc0;
     --grid-dot: #2a2e3a;
     --shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
@@ -48,6 +52,8 @@
   --danger: #ff7a63;
   --node-fill: #232a44;
   --node-stroke: #7c93ff;
+  --bubble-fill: #383a44;
+  --bubble-stroke: #7c7c8a;
   --edge-color: #a7afc0;
   --grid-dot: #2a2e3a;
   --shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
@@ -205,7 +211,7 @@ body {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.tool-btn[data-tool="rect"] svg, .tool-btn[data-tool="circle"] svg, .tool-btn[data-tool="diamond"] svg {
+.tool-btn[data-tool="rect"] svg, .tool-btn[data-tool="circle"] svg, .tool-btn[data-tool="diamond"] svg, .tool-btn[data-tool="bubble"] svg {
   fill: currentColor;
   stroke: none;
 }
@@ -357,6 +363,10 @@ body {
   cursor: grab;
 }
 .bend-handle:active { cursor: grabbing; }
+/* 말풍선 꼬리: 화살표 대신 점점 커지는 점들로 잇는 연결선 */
+.edge-bubble-dot {
+  fill: var(--text-muted);
+}
 .pending-line {
   stroke: var(--danger);
   stroke-width: 2;
