@@ -47,6 +47,16 @@
     const h = Math.ceil(fontSize * 1.5) + 16;
     return { w, h };
   }
+  // 원형(archetype) 템플릿 배치용: 사각형·원·마름모 노드도 라벨 길이에 맞춰
+  // 대략적인 크기를 미리 계산해, 긴 한글 라벨이라도 서로 겹치지 않게 배치한다.
+  function autoNodeSize(shape, label) {
+    if (shape === 'text' || shape === 'loop') return measureNodeSize(shape, label, 'R');
+    measureCtx.font = `400 13px ${FONT_STACK}`;
+    const textW = measureCtx.measureText(label || '').width;
+    const w = clamp(Math.ceil(textW) + 56, 130, 230);
+    const h = shape === 'circle' ? Math.max(96, Math.round(w * 0.62)) : 74;
+    return { w, h };
+  }
 
   // ---------------------------------------------------------------------
   // State
@@ -249,6 +259,235 @@
         { id: uid(), from: n2.id, to: n3.id, label: '쿼리', dashed: false, arrowStart: false, arrowEnd: true },
       ],
     };
+  }
+
+  // ===========================================================================================
+  // 시스템 원형(archetype) 템플릿 — 자주 쓰는 인과 지도 패턴을 원클릭으로 삽입
+  // ===========================================================================================
+  // 작은 DSL: 로컬 좌표(중심 cx,cy 기준)로 노드/연결선을 선언하면 insertTemplate()이
+  // 실제 uid를 부여하고 캔버스의 빈 자리로 평행이동해 배치한다.
+  function tNode(ref, shape, label, cx, cy, loopType) {
+    return { ref, shape, label, cx, cy, loopType };
+  }
+  function tEdge(from, to, opts) {
+    return Object.assign({ from, to, bend: 0, dashed: false, delay: false, polarity: '', arrowEnd: true, arrowStart: false, label: '' }, opts || {});
+  }
+
+  const ARCHETYPE_TEMPLATES = [
+    {
+      id: 'reinforcing',
+      name: '선순환/악순환 (강화 루프)',
+      subtitle: '두 요인이 서로를 증폭시키는 가장 기본적인 강화 루프',
+      build() {
+        return {
+          nodes: [
+            tNode('a', 'text', '요인 A', 0, 0),
+            tNode('b', 'text', '요인 B', 300, 0),
+            tNode('r', 'loop', 'R1', 150, 0, 'R'),
+          ],
+          edges: [tEdge('a', 'b', { bend: 45 }), tEdge('b', 'a', { bend: 45 })],
+        };
+      },
+    },
+    {
+      id: 'balancing',
+      name: '균형 프로세스',
+      subtitle: '목표와의 격차를 줄이려는 조정 행동이 반복되는 균형 루프',
+      build() {
+        return {
+          nodes: [
+            tNode('cur', 'text', '현재 상태', 0, 0),
+            tNode('act', 'text', '조정 행동', 300, 0),
+            tNode('b', 'loop', 'B1', 150, 0, 'B'),
+          ],
+          edges: [tEdge('cur', 'act', { bend: 45 }), tEdge('act', 'cur', { bend: 45, delay: true })],
+        };
+      },
+    },
+    {
+      id: 'fixes-that-fail',
+      name: '역효과를 낳는 해결책',
+      subtitle: '임시방편이 지연을 두고 문제를 다시 악화시키는 구조',
+      build() {
+        return {
+          nodes: [
+            tNode('problem', 'rect', '문제 현상', 0, 0),
+            tNode('fix', 'text', '단기적으로 효과가 있는 임시방편', 320, 0),
+            tNode('b1', 'loop', 'B1', 160, 0, 'B'),
+            tNode('r2', 'loop', 'R2', 160, -140, 'R'),
+          ],
+          edges: [
+            tEdge('problem', 'fix', { bend: 40 }),
+            tEdge('fix', 'problem', { bend: 40 }),
+            tEdge('fix', 'problem', { bend: 180, delay: true }),
+          ],
+        };
+      },
+    },
+    {
+      id: 'shifting-the-burden',
+      name: '부담 떠넘기기',
+      subtitle: '임시방편의 부작용이 장기적 해결책을 약화시키는 구조',
+      build() {
+        return {
+          nodes: [
+            tNode('problem', 'rect', '문제 현상', 0, 0),
+            tNode('fix', 'text', '임시방편', 300, -170),
+            tNode('longterm', 'text', '장기적인 해결책', 300, 170),
+            tNode('side', 'text', '부작용', 620, 0),
+            tNode('b1', 'loop', 'B1', 150, -90, 'B'),
+            tNode('b2', 'loop', 'B2', 150, 90, 'B'),
+            tNode('r3', 'loop', 'R3', 470, -90, 'R'),
+          ],
+          edges: [
+            tEdge('problem', 'fix', { bend: 35 }),
+            tEdge('fix', 'problem', { bend: 35, label: '현상만 다룰 수 있음' }),
+            tEdge('problem', 'longterm', { bend: 35 }),
+            tEdge('longterm', 'problem', { bend: 35, label: '더 근본적으로 접근할 수 있음' }),
+            tEdge('fix', 'side', { bend: -25 }),
+            tEdge('side', 'longterm', { bend: -25, polarity: '-' }),
+          ],
+        };
+      },
+    },
+    {
+      id: 'limits-to-growth',
+      name: '성장의 한계',
+      subtitle: '성장을 이끄는 행동이 결국 제약 요인에 부딪히는 구조',
+      build() {
+        return {
+          nodes: [
+            tNode('action', 'text', '증가하는 행동', 0, 0),
+            tNode('perf', 'rect', '성과 또는 조건', 300, 0),
+            tNode('constraint', 'text', '제약하는 행동', 600, 0),
+            tNode('r1', 'loop', 'R1', 150, 0, 'R'),
+            tNode('b2', 'loop', 'B2', 450, 0, 'B'),
+          ],
+          edges: [
+            tEdge('action', 'perf', { bend: 45 }),
+            tEdge('perf', 'action', { bend: 45 }),
+            tEdge('perf', 'constraint', { bend: 45 }),
+            tEdge('constraint', 'perf', { bend: 45, delay: true, polarity: '-' }),
+          ],
+        };
+      },
+    },
+    {
+      id: 'success-to-successful',
+      name: '성공한 쪽에 몰아주기',
+      subtitle: '한쪽에 자원이 쏠릴수록 다른 쪽의 성공 기회가 줄어드는 구조',
+      build() {
+        return {
+          nodes: [
+            tNode('aSuccess', 'text', 'A의 성공', 0, 0),
+            tNode('alloc', 'rect', 'B 대신 A에게 자원이 할당됨', 320, 0),
+            tNode('bSuccess', 'text', 'B의 성공', 640, 0),
+            tNode('r1', 'loop', 'R1', 160, 0, 'R'),
+            tNode('r2', 'loop', 'R2', 480, 0, 'R'),
+          ],
+          edges: [
+            tEdge('aSuccess', 'alloc', { bend: 45 }),
+            tEdge('alloc', 'aSuccess', { bend: 45 }),
+            tEdge('bSuccess', 'alloc', { bend: 45 }),
+            tEdge('alloc', 'bSuccess', { bend: 45 }),
+          ],
+        };
+      },
+    },
+    {
+      id: 'accidental-adversaries',
+      name: '뜻하지 않은 적수',
+      subtitle: '선의로 시작한 협력 관계가 서로 모르는 사이에 적대적으로 변하는 구조',
+      build() {
+        return {
+          nodes: [
+            tNode('aSuccess', 'rect', 'A의 성공', 0, 0),
+            tNode('aJoint', 'text', 'B와 함께하는 A의 활동', 0, 230),
+            tNode('aAction', 'text', '자신의 결과를 개선하기 위한 A의 조치', 0, -230),
+            tNode('aHarmsB', 'text', 'A가 B의 성공을 의도치 않게 방해함', 330, -150),
+            tNode('bSuccess', 'rect', 'B의 성공', 660, 0),
+            tNode('bJoint', 'text', 'A와 함께하는 B의 행동', 660, 230),
+            tNode('bAction', 'text', '자신의 결과를 개선하기 위한 B의 조치', 660, -230),
+            tNode('bHarmsA', 'text', 'B가 A의 성공을 의도치 않게 방해함', 330, 150),
+            tNode('r1', 'loop', 'R1', 0, 115, 'R'),
+            tNode('b2', 'loop', 'B2', 0, -115, 'B'),
+            tNode('r4', 'loop', 'R4', 660, 115, 'R'),
+            tNode('b3', 'loop', 'B3', 660, -115, 'B'),
+          ],
+          edges: [
+            tEdge('aSuccess', 'aJoint', { bend: 40 }),
+            tEdge('aJoint', 'aSuccess', { bend: 40 }),
+            tEdge('aSuccess', 'aAction', { bend: -40 }),
+            tEdge('aAction', 'aSuccess', { bend: -40 }),
+            tEdge('aAction', 'aHarmsB', { bend: 20 }),
+            tEdge('aHarmsB', 'bSuccess', { bend: -20, polarity: '-' }),
+            tEdge('bSuccess', 'bJoint', { bend: 40 }),
+            tEdge('bJoint', 'bSuccess', { bend: 40 }),
+            tEdge('bSuccess', 'bAction', { bend: -40 }),
+            tEdge('bAction', 'bSuccess', { bend: -40 }),
+            tEdge('bAction', 'bHarmsA', { bend: -20 }),
+            tEdge('bHarmsA', 'aSuccess', { bend: 20, polarity: '-' }),
+          ],
+        };
+      },
+    },
+  ];
+
+  function templateBBox(nodes) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of nodes) {
+      const { w, h } = autoNodeSize(n.shape, n.label);
+      minX = Math.min(minX, n.cx - w / 2); minY = Math.min(minY, n.cy - h / 2);
+      maxX = Math.max(maxX, n.cx + w / 2); maxY = Math.max(maxY, n.cy + h / 2);
+    }
+    return { minX, minY, maxX, maxY };
+  }
+
+  function insertTemplate(tpl) {
+    const def = tpl.build();
+    const bbox = templateBBox(def.nodes);
+    const bw = bbox.maxX - bbox.minX, bh = bbox.maxY - bbox.minY;
+
+    // 현재 보이는 화면 중앙에 놓되, 기존 요소와 겹치면 findFreeSpot과 같은 방식으로 아래로 내린다.
+    const rect = canvasWrap.getBoundingClientRect();
+    const centerWorld = screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    const spot = findFreeSpot(centerWorld.x - bw / 2, centerWorld.y - bh / 2, bw, bh);
+    const offX = spot.x - bbox.minX, offY = spot.y - bbox.minY;
+
+    const idMap = {};
+    const newNodes = def.nodes.map(n => {
+      const { w, h } = autoNodeSize(n.shape, n.label);
+      const id = uid();
+      idMap[n.ref] = id;
+      const node = {
+        id, shape: n.shape, label: n.label,
+        x: n.cx + offX - w / 2, y: n.cy + offY - h / 2, w, h,
+      };
+      if (n.shape === 'loop') {
+        node.loopType = n.loopType || 'R';
+        node.textColor = cssVar('--text') || '#1c2128';
+        node.fill = 'transparent'; node.stroke = node.textColor;
+      } else if (n.shape === 'text') {
+        node.textColor = cssVar('--text') || '#1c2128';
+        node.fill = 'transparent'; node.stroke = node.textColor;
+      } else {
+        const fs = defaultFillStroke(n.shape);
+        node.fill = fs.fill; node.stroke = fs.stroke;
+      }
+      return node;
+    });
+    const newEdges = def.edges.map(e => ({
+      id: uid(), from: idMap[e.from], to: idMap[e.to], label: e.label || '',
+      dashed: !!e.dashed, arrowStart: !!e.arrowStart, arrowEnd: e.arrowEnd !== false,
+      bend: e.bend || 0, delay: !!e.delay, polarity: e.polarity || '', bubble: !!e.bubble,
+    }));
+
+    state.nodes.push(...newNodes);
+    state.edges.push(...newEdges);
+    clearSelection();
+    render();
+    ensureNodeVisible({ x: spot.x, y: spot.y, w: bw, h: bh });
+    pushHistory();
   }
 
   // ===========================================================================================
@@ -1129,13 +1368,35 @@
     pushHistory();
   });
 
+  // 시스템 원형(archetype) 템플릿 드롭다운
+  const archetypeMenu = document.getElementById('archetypeMenu');
+  for (const tpl of ARCHETYPE_TEMPLATES) {
+    const btn = document.createElement('button');
+    const nameEl = document.createElement('span');
+    nameEl.className = 'archetype-name';
+    nameEl.textContent = tpl.name;
+    const subEl = document.createElement('span');
+    subEl.className = 'archetype-subtitle';
+    subEl.textContent = tpl.subtitle;
+    btn.appendChild(nameEl);
+    btn.appendChild(subEl);
+    btn.addEventListener('click', () => { insertTemplate(tpl); archetypeMenu.hidden = true; });
+    archetypeMenu.appendChild(btn);
+  }
+  document.getElementById('btnArchetype').addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportMenu.hidden = true;
+    archetypeMenu.hidden = !archetypeMenu.hidden;
+  });
+
   // Export dropdown
   const exportMenu = document.getElementById('exportMenu');
   document.getElementById('btnExport').addEventListener('click', (e) => {
     e.stopPropagation();
+    archetypeMenu.hidden = true;
     exportMenu.hidden = !exportMenu.hidden;
   });
-  document.addEventListener('click', () => { exportMenu.hidden = true; });
+  document.addEventListener('click', () => { exportMenu.hidden = true; archetypeMenu.hidden = true; });
 
   document.getElementById('btnExportJson').addEventListener('click', () => {
     downloadBlob(JSON.stringify(state, null, 2), `${safeName(state.title)}.json`, 'application/json');
