@@ -20,6 +20,10 @@
       <button id="btnImport" class="btn" title="JSON 파일 불러오기">불러오기</button>
       <input type="file" id="fileInput" accept="application/json,.json" hidden>
       <div class="dropdown">
+        <button id="btnArchetype" class="btn" title="자주 쓰는 시스템 원형(인과 지도 패턴)을 한 번에 삽입">시스템 원형 ▾</button>
+        <div id="archetypeMenu" class="dropdown-menu archetype-menu" hidden></div>
+      </div>
+      <div class="dropdown">
         <button id="btnExport" class="btn btn-primary" title="내보내기">내보내기 ▾</button>
         <div id="exportMenu" class="dropdown-menu" hidden>
           <button id="btnExportJson">JSON (.json)</button>
