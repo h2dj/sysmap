@@ -65,6 +65,10 @@
   const view = { x: 0, y: 0, scale: 1 };
   let tool = 'select';
   let selection = { type: null, id: null };
+  // 다중 선택: Shift+클릭으로 항목을 하나씩 추가/제거하거나, Shift+드래그로
+  // 사각 영역(마퀴)을 그려 한꺼번에 담는다. 2개 이상일 때만 활성 상태로 취급하고
+  // (1개로 줄면 기존 단일 선택 흐름으로 되돌아감) — {type,id} 객체 배열.
+  let multiSelection = [];
   let connectPendingId = null;
   let history = [];
   let historyIndex = -1;
@@ -580,6 +584,15 @@
   }
 
   function deleteSelection() {
+    if (multiSelection.length >= 2) {
+      for (const item of multiSelection) {
+        if (item.type === 'node') removeNode(item.id); else removeEdge(item.id);
+      }
+      clearSelection();
+      render();
+      pushHistory();
+      return;
+    }
     if (!selection.type) return;
     if (selection.type === 'node') removeNode(selection.id);
     else removeEdge(selection.id);
@@ -644,9 +657,12 @@
     if (isTextLike) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
     text.textContent = nodeDisplayText(node);
     g.appendChild(text);
-    if (selection.type === 'node' && selection.id === node.id) {
+    const isSingleSelected = selection.type === 'node' && selection.id === node.id;
+    if (isSingleSelected || isMultiSelected('node', node.id)) {
       g.classList.add('selected');
-      if (isTextLike) {
+      // 크기 조절 손잡이는 노드 하나만 선택됐을 때만 — 여러 개일 땐 어느 걸
+      // 조절하는 건지 모호하므로 대신 점선 박스로만 선택 표시한다.
+      if (isTextLike || !isSingleSelected) {
         const box = svgEl('rect', {
           x: -4, y: -4, width: node.w + 8, height: node.h + 8, rx: 4,
           class: 'text-select-box',
@@ -733,9 +749,11 @@
         } catch (e) { /* not yet laid out */ }
       });
     }
-    if (selection.type === 'edge' && selection.id === edge.id) {
+    const isSingleSelectedEdge = selection.type === 'edge' && selection.id === edge.id;
+    if (isSingleSelectedEdge || isMultiSelected('edge', edge.id)) {
       g.classList.add('selected');
-      if (tool === 'select') {
+      // 곡률 손잡이도 단일 선택일 때만 (다중 선택 중엔 개별 곡률 조절 대상이 모호함).
+      if (isSingleSelectedEdge && tool === 'select') {
         const handle = svgEl('circle', {
           cx: ctrl.x, cy: ctrl.y, r: 6, class: 'bend-handle', 'data-bend': edge.id,
         });
@@ -760,6 +778,7 @@
   // ===========================================================================================
   function clearSelection() {
     selection = { type: null, id: null };
+    multiSelection = [];
     connectPendingId = null;
     propsPanel.hidden = true;
     document.querySelectorAll('.node.selected, .edge.selected').forEach(el => el.classList.remove('selected'));
@@ -768,6 +787,34 @@
 
   function selectItem(type, id) {
     selection = { type, id };
+    multiSelection = [];
+    render();
+    updatePanel();
+  }
+
+  // ---- 다중 선택 -------------------------------------------------------------------------------
+  function isMultiSelected(type, id) {
+    return multiSelection.some(it => it.type === type && it.id === id);
+  }
+  // Shift+클릭으로 항목 하나를 토글. 최종적으로 1개만 남으면 일반 단일 선택으로
+  // 자연스럽게 넘어가고(속성 패널 전체 기능 사용 가능), 2개 이상이면 다중 선택 모드 유지.
+  function toggleMultiSelect(type, id) {
+    const idx = multiSelection.findIndex(it => it.type === type && it.id === id);
+    if (idx >= 0) multiSelection.splice(idx, 1);
+    else {
+      // 기존에 단일 선택돼 있던 항목이 있으면 다중 선택 목록으로 흡수.
+      if (selection.type && !isMultiSelected(selection.type, selection.id)) {
+        multiSelection.push({ type: selection.type, id: selection.id });
+      }
+      multiSelection.push({ type, id });
+    }
+    if (multiSelection.length === 1) {
+      const only = multiSelection[0];
+      selection = { type: only.type, id: only.id };
+      multiSelection = [];
+    } else {
+      selection = { type: null, id: null };
+    }
     render();
     updatePanel();
   }
@@ -834,6 +881,7 @@
   }
 
   function updatePanel() {
+    if (multiSelection.length >= 2) { propsPanel.hidden = false; renderMultiPanel(); return; }
     if (!selection.type) { propsPanel.hidden = true; return; }
     propsPanel.hidden = false;
     if (selection.type === 'node') renderNodePanel();
@@ -1039,6 +1087,77 @@
     panelBody.appendChild(delBtn);
   }
 
+  // 패널을 통째로 다시 그리지 않고 색만 반영 — <input type="color">를 드래그하는
+  // 도중 계속 발생하는 input 이벤트마다 render()로 패널을 재생성하면 브라우저의
+  // 네이티브 색상 선택 팝업이 끊길 수 있어, SVG 쪽만 가볍게 패치한다.
+  function patchNodeColor(node) {
+    const g = nodesLayer.querySelector(`.node[data-id="${node.id}"]`);
+    if (!g) return;
+    const shape = g.querySelector('.node-shape');
+    if (shape) { shape.setAttribute('fill', node.fill); shape.setAttribute('stroke', node.stroke); }
+    const text = g.querySelector('.node-label');
+    if (text && isTextLikeShape(node.shape)) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+  }
+
+  function renderMultiPanel() {
+    panelTitle.textContent = `${multiSelection.length}개 선택됨`;
+    panelBody.innerHTML = '';
+
+    const nodeItems = multiSelection.filter(it => it.type === 'node');
+    const edgeItems = multiSelection.filter(it => it.type === 'edge');
+
+    const summary = document.createElement('p');
+    summary.style.cssText = 'font-size:12px;color:var(--text-muted);margin:0;';
+    summary.textContent = `노드 ${nodeItems.length}개 · 연결선 ${edgeItems.length}개`;
+    panelBody.appendChild(summary);
+
+    if (nodeItems.length > 0) {
+      const hasShaped = nodeItems.some(it => {
+        const n = state.nodes.find(x => x.id === it.id);
+        return n && !isTextLikeShape(n.shape);
+      });
+      if (hasShaped) {
+        panelBody.appendChild(field('채우기 색 (선택한 노드 전체)', () => {
+          const input = document.createElement('input');
+          input.type = 'color'; input.value = cssVar('--node-fill') || '#eef2ff';
+          input.addEventListener('input', () => {
+            for (const it of nodeItems) {
+              const node = state.nodes.find(n => n.id === it.id);
+              if (node && !isTextLikeShape(node.shape)) { node.fill = input.value; patchNodeColor(node); }
+            }
+          });
+          input.addEventListener('change', () => pushHistory());
+          return input;
+        }));
+      }
+      panelBody.appendChild(field('테두리·글자 색 (선택한 노드 전체)', () => {
+        const input = document.createElement('input');
+        input.type = 'color'; input.value = cssVar('--node-stroke') || '#4f6df5';
+        input.addEventListener('input', () => {
+          for (const it of nodeItems) {
+            const node = state.nodes.find(n => n.id === it.id);
+            if (!node) continue;
+            if (isTextLikeShape(node.shape)) node.textColor = input.value; else node.stroke = input.value;
+            patchNodeColor(node);
+          }
+        });
+        input.addEventListener('change', () => pushHistory());
+        return input;
+      }));
+    }
+
+    const hintP = document.createElement('p');
+    hintP.style.cssText = 'font-size:12px;color:var(--text-muted);margin:0;';
+    hintP.textContent = 'Shift+클릭으로 선택을 추가·제거하거나 Shift+드래그로 영역을 지정해 여러 요소를 한꺼번에 담을 수 있습니다. 선택된 노드를 드래그하면 함께 이동합니다.';
+    panelBody.appendChild(hintP);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'danger-btn';
+    delBtn.textContent = `선택한 ${multiSelection.length}개 삭제`;
+    delBtn.addEventListener('click', deleteSelection);
+    panelBody.appendChild(delBtn);
+  }
+
   function field(labelText, buildInput) {
     const wrap = document.createElement('div');
     wrap.className = 'field';
@@ -1218,9 +1337,40 @@
       canvas.setPointerCapture(evt.pointerId);
       return;
     }
+    // Shift+클릭: 항목을 다중 선택 목록에 토글 (드래그는 시작하지 않음).
+    if (evt.shiftKey && nodeGroup) {
+      toggleMultiSelect('node', nodeGroup.dataset.id);
+      return;
+    }
+    if (evt.shiftKey && edgeGroup) {
+      toggleMultiSelect('edge', edgeGroup.dataset.id);
+      return;
+    }
+    // Shift+빈 곳 드래그: 사각 영역(마퀴)으로 여러 노드를 한꺼번에 담는다.
+    if (evt.shiftKey && !nodeGroup && !edgeGroup) {
+      const rect = svgEl('rect', { x: world.x, y: world.y, width: 0, height: 0, class: 'marquee-rect' });
+      overlayLayer.appendChild(rect);
+      drag = { type: 'marquee', start: world, el: rect };
+      canvas.setPointerCapture(evt.pointerId);
+      return;
+    }
     if (nodeGroup) {
       const node = state.nodes.find(n => n.id === nodeGroup.dataset.id);
       if (!node) return;
+      // 이미 다중 선택된 노드를 (Shift 없이) 누르면 선택 그룹 전체를 함께
+      // 드래그할 수 있게 한다 — 움직이지 않고 떼면 그 노드 하나로 선택이 좁혀진다.
+      if (multiSelection.length >= 2 && isMultiSelected('node', node.id)) {
+        const offsets = multiSelection
+          .filter(it => it.type === 'node')
+          .map(it => {
+            const n = state.nodes.find(x => x.id === it.id);
+            return n ? { id: n.id, offX: world.x - n.x, offY: world.y - n.y } : null;
+          })
+          .filter(Boolean);
+        drag = { type: 'move-multi', offsets, clickedId: node.id, moved: false };
+        canvas.setPointerCapture(evt.pointerId);
+        return;
+      }
       selectItem('node', node.id);
       if (checkDoubleClick('node', node.id)) { startInlineEdit('node', node.id); return; }
       drag = { type: 'move', id: node.id, offX: world.x - node.x, offY: world.y - node.y, moved: false };
@@ -1279,16 +1429,66 @@
       edge.bend = relX * drag.perp.x + relY * drag.perp.y;
       const el = edgesLayer.querySelector(`.edge[data-id="${edge.id}"]`);
       if (el) el.replaceWith(buildEdgeEl(edge));
+    } else if (drag.type === 'move-multi') {
+      const world = worldFromEvent(evt);
+      drag.moved = true;
+      for (const off of drag.offsets) {
+        const node = state.nodes.find(n => n.id === off.id);
+        if (!node) continue;
+        node.x = world.x - off.offX;
+        node.y = world.y - off.offY;
+        const g = nodesLayer.querySelector(`.node[data-id="${node.id}"]`);
+        if (g) g.setAttribute('transform', `translate(${node.x} ${node.y})`);
+        updateEdgesTouching(node.id);
+      }
+    } else if (drag.type === 'marquee') {
+      const world = worldFromEvent(evt);
+      const x = Math.min(drag.start.x, world.x), y = Math.min(drag.start.y, world.y);
+      const w = Math.abs(world.x - drag.start.x), h = Math.abs(world.y - drag.start.y);
+      setAttrs(drag.el, { x, y, width: w, height: h });
     }
   });
 
   function endDrag(evt) {
     if (!drag) return;
-    const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'bend';
+    const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'bend' || (drag.type === 'move-multi' && drag.moved);
     const wasBend = drag.type === 'bend';
+    const finishedDrag = drag;
     canvas.classList.remove('panning');
     try { canvas.releasePointerCapture(evt.pointerId); } catch (e) {}
     drag = null;
+
+    if (finishedDrag.type === 'move-multi') {
+      if (!finishedDrag.moved) {
+        // 그냥 클릭이었다면(안 움직였으면) 그룹 선택을 그 노드 하나로 좁힌다.
+        selectItem('node', finishedDrag.clickedId);
+      }
+    } else if (finishedDrag.type === 'marquee') {
+      const x = parseFloat(finishedDrag.el.getAttribute('x'));
+      const y = parseFloat(finishedDrag.el.getAttribute('y'));
+      const w = parseFloat(finishedDrag.el.getAttribute('width'));
+      const h = parseFloat(finishedDrag.el.getAttribute('height'));
+      finishedDrag.el.remove();
+      // 노드 중심점이 마퀴 영역 안에 들어오면 선택 — 살짝 스친 정도로는 안 딸려오게.
+      const picked = state.nodes
+        .filter(n => {
+          const c = nodeCenter(n);
+          return c.x >= x && c.x <= x + w && c.y >= y && c.y <= y + h;
+        })
+        .map(n => ({ type: 'node', id: n.id }));
+      if (picked.length >= 2) {
+        multiSelection = picked;
+        selection = { type: null, id: null };
+      } else if (picked.length === 1) {
+        selection = { type: 'node', id: picked[0].id };
+        multiSelection = [];
+      } else {
+        clearSelection();
+      }
+      render();
+      updatePanel();
+    }
+
     if (wasStructural) pushHistory();
     // 곡률을 드래그하는 동안은 패널을 건드리지 않다가, 끝나면 "직선으로 펴기"
     // 버튼이 새 bend 값에 맞춰 나타나도록 패널을 갱신한다.
@@ -1321,7 +1521,7 @@
     canvas.classList.toggle('tool-connect', name === 'connect');
     canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'].includes(name));
     const hints = {
-      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
+      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. Shift+클릭이나 Shift+드래그로 여러 요소를 한꺼번에 선택할 수 있습니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
       circle: '캔버스를 클릭해 원형 노드를 추가하세요.',
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
@@ -1561,7 +1761,7 @@
     if (evt.key === 'Insert' && selection.type === 'node') { evt.preventDefault(); duplicateConnected(selection.id); return; }
 
     const arrowDirs = { ArrowRight: 'right', ArrowLeft: 'left', ArrowDown: 'down', ArrowUp: 'up' };
-    if (arrowDirs[evt.key] && state.nodes.length > 0) {
+    if (arrowDirs[evt.key] && state.nodes.length > 0 && multiSelection.length < 2) {
       evt.preventDefault();
       moveSelectionByArrow(arrowDirs[evt.key]);
       return;
