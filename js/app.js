@@ -360,14 +360,16 @@
             tNode('action', 'text', '증가하는 행동', 0, 0),
             tNode('perf', 'rect', '성과 또는 조건', 300, 0),
             tNode('constraint', 'text', '제약하는 행동', 600, 0),
-            tNode('r1', 'loop', 'R1', 150, 0, 'R'),
-            tNode('b2', 'loop', 'B2', 450, 0, 'B'),
+            tNode('r1', 'loop', 'R1', 150, -60, 'R'),
+            tNode('b2', 'loop', 'B2', 450, -60, 'B'),
           ],
+          // 안쪽 화살표는 짧게 박스로 들어가고, 바깥쪽 화살표는 크게 위로
+          // 돌아나가 R1·B2 양쪽이 위에서 만나는 책 그림의 모양을 재현한다.
           edges: [
-            tEdge('action', 'perf', { bend: 45 }),
-            tEdge('perf', 'action', { bend: 45 }),
-            tEdge('perf', 'constraint', { bend: 45 }),
-            tEdge('constraint', 'perf', { bend: 45, delay: true, polarity: '-' }),
+            tEdge('action', 'perf', { bend: 15 }),
+            tEdge('perf', 'action', { bend: 170 }),
+            tEdge('constraint', 'perf', { bend: -15 }),
+            tEdge('perf', 'constraint', { bend: -170, delay: true, polarity: '-' }),
           ],
         };
       },
