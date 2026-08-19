@@ -282,6 +282,7 @@
       id: 'reinforcing',
       name: '선순환/악순환 (강화 루프)',
       subtitle: '두 요인이 서로를 증폭시키는 가장 기본적인 강화 루프',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -297,6 +298,7 @@
       id: 'balancing',
       name: '균형 프로세스',
       subtitle: '목표와의 격차를 줄이려는 조정 행동이 반복되는 균형 루프',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -312,6 +314,7 @@
       id: 'fixes-that-fail',
       name: '역효과를 낳는 해결책',
       subtitle: '임시방편이 지연을 두고 문제를 다시 악화시키는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -332,6 +335,7 @@
       id: 'shifting-the-burden',
       name: '부담 떠넘기기',
       subtitle: '임시방편의 부작용이 장기적 해결책을 약화시키는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -358,6 +362,7 @@
       id: 'limits-to-growth',
       name: '성장의 한계',
       subtitle: '성장을 이끄는 행동이 결국 제약 요인에 부딪히는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -382,6 +387,7 @@
       id: 'success-to-successful',
       name: '성공한 쪽에 몰아주기',
       subtitle: '한쪽에 자원이 쏠릴수록 다른 쪽의 성공 기회가 줄어드는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -404,6 +410,7 @@
       id: 'accidental-adversaries',
       name: '뜻하지 않은 적수',
       subtitle: '선의로 시작한 협력 관계가 서로 모르는 사이에 적대적으로 변하는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -436,6 +443,36 @@
           ],
         };
       },
+    },
+    {
+      id: 'drifting-goals',
+      name: '표류하는 목표',
+      subtitle: '의도치 않은 낮은 성과: 실제 수준과 기대하는 성과 수준의 점진적 감소',
+      implemented: false,
+    },
+    {
+      id: 'competing-goals',
+      name: '경쟁하는 목표',
+      subtitle: '상충하는 목표 또는 다수의 목표: 상충하는 목표를 충족하거나 너무 많은 목표를 성취하려고 애쓰다가 아무것도 성취하지 못하는 상황',
+      implemented: false,
+    },
+    {
+      id: 'escalation',
+      name: '단계적 확대',
+      subtitle: '의도치 않은 확산: 어느 한쪽이 더 강하게 밀어붙일수록 다른 쪽이 더 강력히 반발하는 상황',
+      implemented: false,
+    },
+    {
+      id: 'tragedy-of-the-commons',
+      name: '공유지의 비극',
+      subtitle: '전체를 해치는 각 부분의 최적화: 모든 사람이 그 누구의 것도 아닌 자원에서 혜택을 얻는 상황',
+      implemented: false,
+    },
+    {
+      id: 'growth-and-underinvestment',
+      name: '성장과 투자부족',
+      subtitle: '자기가 만든 한계: 성장하도록 밀어붙이지만, 성장 역량에는 충분히 투자하지 않는 상황',
+      implemented: false,
     },
   ];
 
@@ -1574,15 +1611,30 @@
   const archetypeMenu = document.getElementById('archetypeMenu');
   for (const tpl of ARCHETYPE_TEMPLATES) {
     const btn = document.createElement('button');
+    const nameRow = document.createElement('span');
+    nameRow.className = 'archetype-name-row';
     const nameEl = document.createElement('span');
     nameEl.className = 'archetype-name';
     nameEl.textContent = tpl.name;
+    nameRow.appendChild(nameEl);
+    if (!tpl.implemented) {
+      const badge = document.createElement('span');
+      badge.className = 'archetype-badge';
+      badge.textContent = '구현중';
+      nameRow.appendChild(badge);
+    }
     const subEl = document.createElement('span');
     subEl.className = 'archetype-subtitle';
     subEl.textContent = tpl.subtitle;
-    btn.appendChild(nameEl);
+    btn.appendChild(nameRow);
     btn.appendChild(subEl);
-    btn.addEventListener('click', () => { insertTemplate(tpl); archetypeMenu.hidden = true; });
+    if (tpl.implemented) {
+      btn.addEventListener('click', () => { insertTemplate(tpl); archetypeMenu.hidden = true; });
+    } else {
+      // 아직 다듬는 중인 원형 — 목록에는 보이되 선택은 막아둔다.
+      btn.disabled = true;
+      btn.classList.add('archetype-disabled');
+    }
     archetypeMenu.appendChild(btn);
   }
   document.getElementById('btnArchetype').addEventListener('click', (e) => {

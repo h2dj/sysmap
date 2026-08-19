@@ -176,8 +176,24 @@ body {
   white-space: normal;
 }
 .archetype-menu button:last-child { border-bottom: none; }
+.archetype-name-row { display: flex; align-items: center; gap: 6px; }
 .archetype-menu .archetype-name { font-weight: 600; font-size: 13px; }
 .archetype-menu .archetype-subtitle { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+.archetype-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+.archetype-menu button.archetype-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.archetype-menu button.archetype-disabled:hover { background: none; }
 
 /* ===== Body layout ===== */
 #body {
