@@ -623,11 +623,19 @@
     state.edges = state.edges.filter(e => e.id !== id);
   }
 
+  // 멤버가 1명만 남은 그룹은 의미가 없으므로 groupId를 지워 평범한 노드로 되돌린다.
+  function cleanupDegenerateGroups() {
+    const counts = {};
+    for (const n of state.nodes) if (n.groupId) counts[n.groupId] = (counts[n.groupId] || 0) + 1;
+    for (const n of state.nodes) if (n.groupId && counts[n.groupId] < 2) delete n.groupId;
+  }
+
   function deleteSelection() {
     if (multiSelection.length >= 2) {
       for (const item of multiSelection) {
         if (item.type === 'node') removeNode(item.id); else removeEdge(item.id);
       }
+      cleanupDegenerateGroups();
       clearSelection();
       render();
       pushHistory();
@@ -636,7 +644,75 @@
     if (!selection.type) return;
     if (selection.type === 'node') removeNode(selection.id);
     else removeEdge(selection.id);
+    cleanupDegenerateGroups();
     clearSelection();
+    render();
+    pushHistory();
+  }
+
+  // ---- 그룹화 -----------------------------------------------------------------------------------
+  // 여러 노드를 하나의 그룹으로 묶으면, 이후 그중 아무거나 하나만 (Shift 없이) 클릭해도
+  // 그룹 전체가 선택되어 함께 움직이거나 삭제된다. 연결선은 묶지 않는다 — 어차피 양 끝
+  // 노드가 함께 움직이면 따라오므로 독립적인 groupId가 필요 없다.
+  function groupSelection() {
+    const nodeItems = multiSelection.filter(it => it.type === 'node');
+    if (nodeItems.length < 2) return;
+    const gid = uid();
+    for (const it of nodeItems) {
+      const node = state.nodes.find(n => n.id === it.id);
+      if (node) node.groupId = gid;
+    }
+    render();
+    pushHistory();
+    updatePanel();
+  }
+  function ungroupSelection() {
+    const items = multiSelection.length ? multiSelection : (selection.type ? [selection] : []);
+    let changed = false;
+    for (const it of items) {
+      if (it.type !== 'node') continue;
+      const node = state.nodes.find(n => n.id === it.id);
+      if (node && node.groupId) { delete node.groupId; changed = true; }
+    }
+    if (changed) { render(); pushHistory(); updatePanel(); }
+  }
+
+  // ---- 정렬·배치 ---------------------------------------------------------------------------------
+  function alignNodes(mode) {
+    const nodes = multiSelection.filter(it => it.type === 'node')
+      .map(it => state.nodes.find(n => n.id === it.id)).filter(Boolean);
+    if (nodes.length < 2) return;
+    if (mode === 'left') {
+      const v = Math.min(...nodes.map(n => n.x));
+      nodes.forEach(n => { n.x = v; });
+    } else if (mode === 'right') {
+      const v = Math.max(...nodes.map(n => n.x + n.w));
+      nodes.forEach(n => { n.x = v - n.w; });
+    } else if (mode === 'top') {
+      const v = Math.min(...nodes.map(n => n.y));
+      nodes.forEach(n => { n.y = v; });
+    } else if (mode === 'bottom') {
+      const v = Math.max(...nodes.map(n => n.y + n.h));
+      nodes.forEach(n => { n.y = v - n.h; });
+    } else if (mode === 'center-x') {
+      const avg = nodes.reduce((s, n) => s + n.x + n.w / 2, 0) / nodes.length;
+      nodes.forEach(n => { n.x = avg - n.w / 2; });
+    } else if (mode === 'center-y') {
+      const avg = nodes.reduce((s, n) => s + n.y + n.h / 2, 0) / nodes.length;
+      nodes.forEach(n => { n.y = avg - n.h / 2; });
+    } else if (mode === 'distribute-x') {
+      if (nodes.length < 3) return;
+      const sorted = [...nodes].sort((a, b) => (a.x + a.w / 2) - (b.x + b.w / 2));
+      const firstC = sorted[0].x + sorted[0].w / 2, lastC = sorted[sorted.length - 1].x + sorted[sorted.length - 1].w / 2;
+      const step = (lastC - firstC) / (sorted.length - 1);
+      sorted.forEach((n, i) => { n.x = (firstC + step * i) - n.w / 2; });
+    } else if (mode === 'distribute-y') {
+      if (nodes.length < 3) return;
+      const sorted = [...nodes].sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2));
+      const firstC = sorted[0].y + sorted[0].h / 2, lastC = sorted[sorted.length - 1].y + sorted[sorted.length - 1].h / 2;
+      const step = (lastC - firstC) / (sorted.length - 1);
+      sorted.forEach((n, i) => { n.y = (firstC + step * i) - n.h / 2; });
+    }
     render();
     pushHistory();
   }
@@ -649,9 +725,37 @@
     edgesLayer.innerHTML = '';
     for (const e of state.edges) edgesLayer.appendChild(buildEdgeEl(e));
     for (const n of state.nodes) nodesLayer.appendChild(buildNodeEl(n));
+    renderGroupOutlines();
     emptyHint.classList.toggle('hidden', state.nodes.length > 0);
     countsEl.textContent = `노드 ${state.nodes.length}개 · 연결 ${state.edges.length}개`;
     updatePanel();
+  }
+
+  // 그룹에 속한 노드들 주위에 은은한 점선 테두리를 그려, 선택하지 않아도 어떤 노드끼리
+  // 묶여 있는지 알아볼 수 있게 한다. (overlayLayer는 ui-only라 내보내기에서는 자동 제외됨)
+  function renderGroupOutlines() {
+    const groups = {};
+    for (const n of state.nodes) {
+      if (!n.groupId) continue;
+      (groups[n.groupId] || (groups[n.groupId] = [])).push(n);
+    }
+    const frag = document.createDocumentFragment();
+    for (const gid in groups) {
+      const members = groups[gid];
+      if (members.length < 2) continue;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of members) {
+        minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
+      }
+      const pad = 14;
+      frag.appendChild(svgEl('rect', {
+        x: minX - pad, y: minY - pad, width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2,
+        rx: 10, class: 'group-outline',
+      }));
+    }
+    overlayLayer.innerHTML = '';
+    overlayLayer.appendChild(frag);
   }
 
   // 텍스트·루프 노드는 배경 도형이 없다 — 글자만 떠 있는 인과 지도 변수명 표기.
@@ -1186,9 +1290,72 @@
       }));
     }
 
+    if (nodeItems.length >= 2) {
+      const alignLabel = document.createElement('p');
+      alignLabel.className = 'panel-section-label';
+      alignLabel.textContent = '정렬';
+      panelBody.appendChild(alignLabel);
+
+      const alignGrid = document.createElement('div');
+      alignGrid.className = 'align-grid';
+      const alignBtns = [
+        ['왼쪽 맞춤', 'left'], ['가로 중앙', 'center-x'], ['오른쪽 맞춤', 'right'],
+        ['위쪽 맞춤', 'top'], ['세로 중앙', 'center-y'], ['아래쪽 맞춤', 'bottom'],
+      ];
+      for (const [label, mode] of alignBtns) {
+        const b = document.createElement('button');
+        b.className = 'align-btn';
+        b.type = 'button';
+        b.textContent = label;
+        b.addEventListener('click', () => alignNodes(mode));
+        alignGrid.appendChild(b);
+      }
+      panelBody.appendChild(alignGrid);
+
+      if (nodeItems.length >= 3) {
+        const distGrid = document.createElement('div');
+        distGrid.className = 'align-grid align-grid-2';
+        const distBtns = [['가로 균등 배치', 'distribute-x'], ['세로 균등 배치', 'distribute-y']];
+        for (const [label, mode] of distBtns) {
+          const b = document.createElement('button');
+          b.className = 'align-btn';
+          b.type = 'button';
+          b.textContent = label;
+          b.addEventListener('click', () => alignNodes(mode));
+          distGrid.appendChild(b);
+        }
+        panelBody.appendChild(distGrid);
+      }
+
+      const groupLabel = document.createElement('p');
+      groupLabel.className = 'panel-section-label';
+      groupLabel.textContent = '그룹';
+      panelBody.appendChild(groupLabel);
+
+      const hasGroupedMember = nodeItems.some(it => {
+        const n = state.nodes.find(x => x.id === it.id);
+        return n && n.groupId;
+      });
+      const groupBtn = document.createElement('button');
+      groupBtn.className = 'btn';
+      groupBtn.type = 'button';
+      groupBtn.textContent = '그룹으로 묶기';
+      groupBtn.addEventListener('click', groupSelection);
+      panelBody.appendChild(groupBtn);
+
+      if (hasGroupedMember) {
+        const ungroupBtn = document.createElement('button');
+        ungroupBtn.className = 'btn';
+        ungroupBtn.type = 'button';
+        ungroupBtn.textContent = '그룹 해제';
+        ungroupBtn.addEventListener('click', ungroupSelection);
+        panelBody.appendChild(ungroupBtn);
+      }
+    }
+
     const hintP = document.createElement('p');
     hintP.style.cssText = 'font-size:12px;color:var(--text-muted);margin:0;';
-    hintP.textContent = 'Shift+클릭으로 선택을 추가·제거하거나 Shift+드래그로 영역을 지정해 여러 요소를 한꺼번에 담을 수 있습니다. 선택된 노드를 드래그하면 함께 이동합니다.';
+    hintP.textContent = 'Shift+클릭으로 선택을 추가·제거하거나 Shift+드래그로 영역을 지정해 여러 요소를 한꺼번에 담을 수 있습니다. 선택된 노드를 드래그하면 함께 이동합니다. 그룹으로 묶으면 이후 아무 멤버나 클릭해도 전체가 함께 선택됩니다.';
     panelBody.appendChild(hintP);
 
     const delBtn = document.createElement('button');
@@ -1397,8 +1564,24 @@
     if (nodeGroup) {
       const node = state.nodes.find(n => n.id === nodeGroup.dataset.id);
       if (!node) return;
-      // 이미 다중 선택된 노드를 (Shift 없이) 누르면 선택 그룹 전체를 함께
-      // 드래그할 수 있게 한다 — 움직이지 않고 떼면 그 노드 하나로 선택이 좁혀진다.
+      // 그룹으로 묶인 노드는 (Shift 없이) 하나만 눌러도 그룹 전체가 선택된다.
+      if (node.groupId) {
+        const members = state.nodes.filter(n => n.groupId === node.groupId);
+        if (members.length >= 2) {
+          multiSelection = members.map(n => ({ type: 'node', id: n.id }));
+          selection = { type: null, id: null };
+        } else {
+          // 멤버가 하나뿐이면 의미 없는 그룹이니 정리하고 평범한 단일 선택으로.
+          delete node.groupId;
+          multiSelection = [];
+          selection = { type: 'node', id: node.id };
+        }
+        render();
+        updatePanel();
+      }
+      // 이미 다중 선택된(혹은 방금 그룹 전체가 선택된) 노드를 (Shift 없이) 누르면
+      // 선택 그룹 전체를 함께 드래그할 수 있게 한다 — 임시 다중 선택은 움직이지
+      // 않고 떼면 그 노드 하나로 선택이 좁혀지고, 정식 그룹은 그대로 유지된다.
       if (multiSelection.length >= 2 && isMultiSelected('node', node.id)) {
         const offsets = multiSelection
           .filter(it => it.type === 'node')
@@ -1407,7 +1590,7 @@
             return n ? { id: n.id, offX: world.x - n.x, offY: world.y - n.y } : null;
           })
           .filter(Boolean);
-        drag = { type: 'move-multi', offsets, clickedId: node.id, moved: false };
+        drag = { type: 'move-multi', offsets, clickedId: node.id, moved: false, isGroup: !!node.groupId };
         canvas.setPointerCapture(evt.pointerId);
         return;
       }
@@ -1499,8 +1682,9 @@
     drag = null;
 
     if (finishedDrag.type === 'move-multi') {
-      if (!finishedDrag.moved) {
-        // 그냥 클릭이었다면(안 움직였으면) 그룹 선택을 그 노드 하나로 좁힌다.
+      if (!finishedDrag.moved && !finishedDrag.isGroup) {
+        // 그냥 클릭이었다면(안 움직였으면) 임시 다중 선택은 그 노드 하나로 좁힌다.
+        // 단, 영구 그룹은 클릭만 해도 전체가 계속 선택된 상태를 유지한다.
         selectItem('node', finishedDrag.clickedId);
       }
     } else if (finishedDrag.type === 'marquee') {
