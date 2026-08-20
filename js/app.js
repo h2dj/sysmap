@@ -24,6 +24,9 @@
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
   const FONT_STACK = '-apple-system, "Apple SD Gothic Neo", "Segoe UI", Roboto, sans-serif';
+  const SHAPE_TOOLS = ['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'];
+  // 툴바가 아이콘만 남는 좁은 화면(css의 720px 분기와 동일 기준)을 "모바일"로 취급한다.
+  function isMobileViewport() { return window.matchMedia('(max-width: 720px)').matches; }
   const NODE_DEFAULT_SIZES = { rect: [150, 90], circle: [110, 110], diamond: [140, 100], bubble: [180, 120] };
   const NODE_DEFAULT_LABELS = { rect: '시스템', circle: '사용자', diamond: '분기', text: '텍스트', loop: 'R1', bubble: '말풍선' };
   // 말풍선(주석용 회색 노드)은 사각형/원/마름모와 다른 기본 배색을 쓴다.
@@ -65,6 +68,10 @@
   const view = { x: 0, y: 0, scale: 1 };
   let tool = 'select';
   let selection = { type: null, id: null };
+  // 다중 선택: Shift+클릭으로 항목을 하나씩 추가/제거하거나, Shift+드래그로
+  // 사각 영역(마퀴)을 그려 한꺼번에 담는다. 2개 이상일 때만 활성 상태로 취급하고
+  // (1개로 줄면 기존 단일 선택 흐름으로 되돌아감) — {type,id} 객체 배열.
+  let multiSelection = [];
   let connectPendingId = null;
   let history = [];
   let historyIndex = -1;
@@ -278,6 +285,7 @@
       id: 'reinforcing',
       name: '선순환/악순환 (강화 루프)',
       subtitle: '두 요인이 서로를 증폭시키는 가장 기본적인 강화 루프',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -293,6 +301,7 @@
       id: 'balancing',
       name: '균형 프로세스',
       subtitle: '목표와의 격차를 줄이려는 조정 행동이 반복되는 균형 루프',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -308,6 +317,7 @@
       id: 'fixes-that-fail',
       name: '역효과를 낳는 해결책',
       subtitle: '임시방편이 지연을 두고 문제를 다시 악화시키는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -328,6 +338,7 @@
       id: 'shifting-the-burden',
       name: '부담 떠넘기기',
       subtitle: '임시방편의 부작용이 장기적 해결책을 약화시키는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -354,20 +365,23 @@
       id: 'limits-to-growth',
       name: '성장의 한계',
       subtitle: '성장을 이끄는 행동이 결국 제약 요인에 부딪히는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
             tNode('action', 'text', '증가하는 행동', 0, 0),
             tNode('perf', 'rect', '성과 또는 조건', 300, 0),
             tNode('constraint', 'text', '제약하는 행동', 600, 0),
-            tNode('r1', 'loop', 'R1', 150, 0, 'R'),
-            tNode('b2', 'loop', 'B2', 450, 0, 'B'),
+            tNode('r1', 'loop', 'R1', 150, -60, 'R'),
+            tNode('b2', 'loop', 'B2', 450, -60, 'B'),
           ],
+          // 안쪽 화살표는 짧게 박스로 들어가고, 바깥쪽 화살표는 크게 위로
+          // 돌아나가 R1·B2 양쪽이 위에서 만나는 책 그림의 모양을 재현한다.
           edges: [
-            tEdge('action', 'perf', { bend: 45 }),
-            tEdge('perf', 'action', { bend: 45 }),
-            tEdge('perf', 'constraint', { bend: 45 }),
-            tEdge('constraint', 'perf', { bend: 45, delay: true, polarity: '-' }),
+            tEdge('action', 'perf', { bend: 15 }),
+            tEdge('perf', 'action', { bend: 170 }),
+            tEdge('constraint', 'perf', { bend: -15 }),
+            tEdge('perf', 'constraint', { bend: -170, delay: true, polarity: '-' }),
           ],
         };
       },
@@ -376,6 +390,7 @@
       id: 'success-to-successful',
       name: '성공한 쪽에 몰아주기',
       subtitle: '한쪽에 자원이 쏠릴수록 다른 쪽의 성공 기회가 줄어드는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -398,6 +413,7 @@
       id: 'accidental-adversaries',
       name: '뜻하지 않은 적수',
       subtitle: '선의로 시작한 협력 관계가 서로 모르는 사이에 적대적으로 변하는 구조',
+      implemented: false,
       build() {
         return {
           nodes: [
@@ -430,6 +446,36 @@
           ],
         };
       },
+    },
+    {
+      id: 'drifting-goals',
+      name: '표류하는 목표',
+      subtitle: '의도치 않은 낮은 성과: 실제 수준과 기대하는 성과 수준의 점진적 감소',
+      implemented: false,
+    },
+    {
+      id: 'competing-goals',
+      name: '경쟁하는 목표',
+      subtitle: '상충하는 목표 또는 다수의 목표: 상충하는 목표를 충족하거나 너무 많은 목표를 성취하려고 애쓰다가 아무것도 성취하지 못하는 상황',
+      implemented: false,
+    },
+    {
+      id: 'escalation',
+      name: '단계적 확대',
+      subtitle: '의도치 않은 확산: 어느 한쪽이 더 강하게 밀어붙일수록 다른 쪽이 더 강력히 반발하는 상황',
+      implemented: false,
+    },
+    {
+      id: 'tragedy-of-the-commons',
+      name: '공유지의 비극',
+      subtitle: '전체를 해치는 각 부분의 최적화: 모든 사람이 그 누구의 것도 아닌 자원에서 혜택을 얻는 상황',
+      implemented: false,
+    },
+    {
+      id: 'growth-and-underinvestment',
+      name: '성장과 투자부족',
+      subtitle: '자기가 만든 한계: 성장하도록 밀어붙이지만, 성장 역량에는 충분히 투자하지 않는 상황',
+      implemented: false,
     },
   ];
 
@@ -577,11 +623,96 @@
     state.edges = state.edges.filter(e => e.id !== id);
   }
 
+  // 멤버가 1명만 남은 그룹은 의미가 없으므로 groupId를 지워 평범한 노드로 되돌린다.
+  function cleanupDegenerateGroups() {
+    const counts = {};
+    for (const n of state.nodes) if (n.groupId) counts[n.groupId] = (counts[n.groupId] || 0) + 1;
+    for (const n of state.nodes) if (n.groupId && counts[n.groupId] < 2) delete n.groupId;
+  }
+
   function deleteSelection() {
+    if (multiSelection.length >= 2) {
+      for (const item of multiSelection) {
+        if (item.type === 'node') removeNode(item.id); else removeEdge(item.id);
+      }
+      cleanupDegenerateGroups();
+      clearSelection();
+      render();
+      pushHistory();
+      return;
+    }
     if (!selection.type) return;
     if (selection.type === 'node') removeNode(selection.id);
     else removeEdge(selection.id);
+    cleanupDegenerateGroups();
     clearSelection();
+    render();
+    pushHistory();
+  }
+
+  // ---- 그룹화 -----------------------------------------------------------------------------------
+  // 여러 노드를 하나의 그룹으로 묶으면, 이후 그중 아무거나 하나만 (Shift 없이) 클릭해도
+  // 그룹 전체가 선택되어 함께 움직이거나 삭제된다. 연결선은 묶지 않는다 — 어차피 양 끝
+  // 노드가 함께 움직이면 따라오므로 독립적인 groupId가 필요 없다.
+  function groupSelection() {
+    const nodeItems = multiSelection.filter(it => it.type === 'node');
+    if (nodeItems.length < 2) return;
+    const gid = uid();
+    for (const it of nodeItems) {
+      const node = state.nodes.find(n => n.id === it.id);
+      if (node) node.groupId = gid;
+    }
+    render();
+    pushHistory();
+    updatePanel();
+  }
+  function ungroupSelection() {
+    const items = multiSelection.length ? multiSelection : (selection.type ? [selection] : []);
+    let changed = false;
+    for (const it of items) {
+      if (it.type !== 'node') continue;
+      const node = state.nodes.find(n => n.id === it.id);
+      if (node && node.groupId) { delete node.groupId; changed = true; }
+    }
+    if (changed) { render(); pushHistory(); updatePanel(); }
+  }
+
+  // ---- 정렬·배치 ---------------------------------------------------------------------------------
+  function alignNodes(mode) {
+    const nodes = multiSelection.filter(it => it.type === 'node')
+      .map(it => state.nodes.find(n => n.id === it.id)).filter(Boolean);
+    if (nodes.length < 2) return;
+    if (mode === 'left') {
+      const v = Math.min(...nodes.map(n => n.x));
+      nodes.forEach(n => { n.x = v; });
+    } else if (mode === 'right') {
+      const v = Math.max(...nodes.map(n => n.x + n.w));
+      nodes.forEach(n => { n.x = v - n.w; });
+    } else if (mode === 'top') {
+      const v = Math.min(...nodes.map(n => n.y));
+      nodes.forEach(n => { n.y = v; });
+    } else if (mode === 'bottom') {
+      const v = Math.max(...nodes.map(n => n.y + n.h));
+      nodes.forEach(n => { n.y = v - n.h; });
+    } else if (mode === 'center-x') {
+      const avg = nodes.reduce((s, n) => s + n.x + n.w / 2, 0) / nodes.length;
+      nodes.forEach(n => { n.x = avg - n.w / 2; });
+    } else if (mode === 'center-y') {
+      const avg = nodes.reduce((s, n) => s + n.y + n.h / 2, 0) / nodes.length;
+      nodes.forEach(n => { n.y = avg - n.h / 2; });
+    } else if (mode === 'distribute-x') {
+      if (nodes.length < 3) return;
+      const sorted = [...nodes].sort((a, b) => (a.x + a.w / 2) - (b.x + b.w / 2));
+      const firstC = sorted[0].x + sorted[0].w / 2, lastC = sorted[sorted.length - 1].x + sorted[sorted.length - 1].w / 2;
+      const step = (lastC - firstC) / (sorted.length - 1);
+      sorted.forEach((n, i) => { n.x = (firstC + step * i) - n.w / 2; });
+    } else if (mode === 'distribute-y') {
+      if (nodes.length < 3) return;
+      const sorted = [...nodes].sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2));
+      const firstC = sorted[0].y + sorted[0].h / 2, lastC = sorted[sorted.length - 1].y + sorted[sorted.length - 1].h / 2;
+      const step = (lastC - firstC) / (sorted.length - 1);
+      sorted.forEach((n, i) => { n.y = (firstC + step * i) - n.h / 2; });
+    }
     render();
     pushHistory();
   }
@@ -594,9 +725,37 @@
     edgesLayer.innerHTML = '';
     for (const e of state.edges) edgesLayer.appendChild(buildEdgeEl(e));
     for (const n of state.nodes) nodesLayer.appendChild(buildNodeEl(n));
+    renderGroupOutlines();
     emptyHint.classList.toggle('hidden', state.nodes.length > 0);
     countsEl.textContent = `노드 ${state.nodes.length}개 · 연결 ${state.edges.length}개`;
     updatePanel();
+  }
+
+  // 그룹에 속한 노드들 주위에 은은한 점선 테두리를 그려, 선택하지 않아도 어떤 노드끼리
+  // 묶여 있는지 알아볼 수 있게 한다. (overlayLayer는 ui-only라 내보내기에서는 자동 제외됨)
+  function renderGroupOutlines() {
+    const groups = {};
+    for (const n of state.nodes) {
+      if (!n.groupId) continue;
+      (groups[n.groupId] || (groups[n.groupId] = [])).push(n);
+    }
+    const frag = document.createDocumentFragment();
+    for (const gid in groups) {
+      const members = groups[gid];
+      if (members.length < 2) continue;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of members) {
+        minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+        maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
+      }
+      const pad = 14;
+      frag.appendChild(svgEl('rect', {
+        x: minX - pad, y: minY - pad, width: (maxX - minX) + pad * 2, height: (maxY - minY) + pad * 2,
+        rx: 10, class: 'group-outline',
+      }));
+    }
+    overlayLayer.innerHTML = '';
+    overlayLayer.appendChild(frag);
   }
 
   // 텍스트·루프 노드는 배경 도형이 없다 — 글자만 떠 있는 인과 지도 변수명 표기.
@@ -642,9 +801,12 @@
     if (isTextLike) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
     text.textContent = nodeDisplayText(node);
     g.appendChild(text);
-    if (selection.type === 'node' && selection.id === node.id) {
+    const isSingleSelected = selection.type === 'node' && selection.id === node.id;
+    if (isSingleSelected || isMultiSelected('node', node.id)) {
       g.classList.add('selected');
-      if (isTextLike) {
+      // 크기 조절 손잡이는 노드 하나만 선택됐을 때만 — 여러 개일 땐 어느 걸
+      // 조절하는 건지 모호하므로 대신 점선 박스로만 선택 표시한다.
+      if (isTextLike || !isSingleSelected) {
         const box = svgEl('rect', {
           x: -4, y: -4, width: node.w + 8, height: node.h + 8, rx: 4,
           class: 'text-select-box',
@@ -731,9 +893,11 @@
         } catch (e) { /* not yet laid out */ }
       });
     }
-    if (selection.type === 'edge' && selection.id === edge.id) {
+    const isSingleSelectedEdge = selection.type === 'edge' && selection.id === edge.id;
+    if (isSingleSelectedEdge || isMultiSelected('edge', edge.id)) {
       g.classList.add('selected');
-      if (tool === 'select') {
+      // 곡률 손잡이도 단일 선택일 때만 (다중 선택 중엔 개별 곡률 조절 대상이 모호함).
+      if (isSingleSelectedEdge && tool === 'select') {
         const handle = svgEl('circle', {
           cx: ctrl.x, cy: ctrl.y, r: 6, class: 'bend-handle', 'data-bend': edge.id,
         });
@@ -758,6 +922,7 @@
   // ===========================================================================================
   function clearSelection() {
     selection = { type: null, id: null };
+    multiSelection = [];
     connectPendingId = null;
     propsPanel.hidden = true;
     document.querySelectorAll('.node.selected, .edge.selected').forEach(el => el.classList.remove('selected'));
@@ -766,6 +931,34 @@
 
   function selectItem(type, id) {
     selection = { type, id };
+    multiSelection = [];
+    render();
+    updatePanel();
+  }
+
+  // ---- 다중 선택 -------------------------------------------------------------------------------
+  function isMultiSelected(type, id) {
+    return multiSelection.some(it => it.type === type && it.id === id);
+  }
+  // Shift+클릭으로 항목 하나를 토글. 최종적으로 1개만 남으면 일반 단일 선택으로
+  // 자연스럽게 넘어가고(속성 패널 전체 기능 사용 가능), 2개 이상이면 다중 선택 모드 유지.
+  function toggleMultiSelect(type, id) {
+    const idx = multiSelection.findIndex(it => it.type === type && it.id === id);
+    if (idx >= 0) multiSelection.splice(idx, 1);
+    else {
+      // 기존에 단일 선택돼 있던 항목이 있으면 다중 선택 목록으로 흡수.
+      if (selection.type && !isMultiSelected(selection.type, selection.id)) {
+        multiSelection.push({ type: selection.type, id: selection.id });
+      }
+      multiSelection.push({ type, id });
+    }
+    if (multiSelection.length === 1) {
+      const only = multiSelection[0];
+      selection = { type: only.type, id: only.id };
+      multiSelection = [];
+    } else {
+      selection = { type: null, id: null };
+    }
     render();
     updatePanel();
   }
@@ -832,6 +1025,7 @@
   }
 
   function updatePanel() {
+    if (multiSelection.length >= 2) { propsPanel.hidden = false; renderMultiPanel(); return; }
     if (!selection.type) { propsPanel.hidden = true; return; }
     propsPanel.hidden = false;
     if (selection.type === 'node') renderNodePanel();
@@ -1037,6 +1231,140 @@
     panelBody.appendChild(delBtn);
   }
 
+  // 패널을 통째로 다시 그리지 않고 색만 반영 — <input type="color">를 드래그하는
+  // 도중 계속 발생하는 input 이벤트마다 render()로 패널을 재생성하면 브라우저의
+  // 네이티브 색상 선택 팝업이 끊길 수 있어, SVG 쪽만 가볍게 패치한다.
+  function patchNodeColor(node) {
+    const g = nodesLayer.querySelector(`.node[data-id="${node.id}"]`);
+    if (!g) return;
+    const shape = g.querySelector('.node-shape');
+    if (shape) { shape.setAttribute('fill', node.fill); shape.setAttribute('stroke', node.stroke); }
+    const text = g.querySelector('.node-label');
+    if (text && isTextLikeShape(node.shape)) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+  }
+
+  function renderMultiPanel() {
+    panelTitle.textContent = `${multiSelection.length}개 선택됨`;
+    panelBody.innerHTML = '';
+
+    const nodeItems = multiSelection.filter(it => it.type === 'node');
+    const edgeItems = multiSelection.filter(it => it.type === 'edge');
+
+    const summary = document.createElement('p');
+    summary.style.cssText = 'font-size:12px;color:var(--text-muted);margin:0;';
+    summary.textContent = `노드 ${nodeItems.length}개 · 연결선 ${edgeItems.length}개`;
+    panelBody.appendChild(summary);
+
+    if (nodeItems.length > 0) {
+      const hasShaped = nodeItems.some(it => {
+        const n = state.nodes.find(x => x.id === it.id);
+        return n && !isTextLikeShape(n.shape);
+      });
+      if (hasShaped) {
+        panelBody.appendChild(field('채우기 색 (선택한 노드 전체)', () => {
+          const input = document.createElement('input');
+          input.type = 'color'; input.value = cssVar('--node-fill') || '#eef2ff';
+          input.addEventListener('input', () => {
+            for (const it of nodeItems) {
+              const node = state.nodes.find(n => n.id === it.id);
+              if (node && !isTextLikeShape(node.shape)) { node.fill = input.value; patchNodeColor(node); }
+            }
+          });
+          input.addEventListener('change', () => pushHistory());
+          return input;
+        }));
+      }
+      panelBody.appendChild(field('테두리·글자 색 (선택한 노드 전체)', () => {
+        const input = document.createElement('input');
+        input.type = 'color'; input.value = cssVar('--node-stroke') || '#4f6df5';
+        input.addEventListener('input', () => {
+          for (const it of nodeItems) {
+            const node = state.nodes.find(n => n.id === it.id);
+            if (!node) continue;
+            if (isTextLikeShape(node.shape)) node.textColor = input.value; else node.stroke = input.value;
+            patchNodeColor(node);
+          }
+        });
+        input.addEventListener('change', () => pushHistory());
+        return input;
+      }));
+    }
+
+    if (nodeItems.length >= 2) {
+      const alignLabel = document.createElement('p');
+      alignLabel.className = 'panel-section-label';
+      alignLabel.textContent = '정렬';
+      panelBody.appendChild(alignLabel);
+
+      const alignGrid = document.createElement('div');
+      alignGrid.className = 'align-grid';
+      const alignBtns = [
+        ['왼쪽 맞춤', 'left'], ['가로 중앙', 'center-x'], ['오른쪽 맞춤', 'right'],
+        ['위쪽 맞춤', 'top'], ['세로 중앙', 'center-y'], ['아래쪽 맞춤', 'bottom'],
+      ];
+      for (const [label, mode] of alignBtns) {
+        const b = document.createElement('button');
+        b.className = 'align-btn';
+        b.type = 'button';
+        b.textContent = label;
+        b.addEventListener('click', () => alignNodes(mode));
+        alignGrid.appendChild(b);
+      }
+      panelBody.appendChild(alignGrid);
+
+      if (nodeItems.length >= 3) {
+        const distGrid = document.createElement('div');
+        distGrid.className = 'align-grid align-grid-2';
+        const distBtns = [['가로 균등 배치', 'distribute-x'], ['세로 균등 배치', 'distribute-y']];
+        for (const [label, mode] of distBtns) {
+          const b = document.createElement('button');
+          b.className = 'align-btn';
+          b.type = 'button';
+          b.textContent = label;
+          b.addEventListener('click', () => alignNodes(mode));
+          distGrid.appendChild(b);
+        }
+        panelBody.appendChild(distGrid);
+      }
+
+      const groupLabel = document.createElement('p');
+      groupLabel.className = 'panel-section-label';
+      groupLabel.textContent = '그룹';
+      panelBody.appendChild(groupLabel);
+
+      const hasGroupedMember = nodeItems.some(it => {
+        const n = state.nodes.find(x => x.id === it.id);
+        return n && n.groupId;
+      });
+      const groupBtn = document.createElement('button');
+      groupBtn.className = 'btn';
+      groupBtn.type = 'button';
+      groupBtn.textContent = '그룹으로 묶기';
+      groupBtn.addEventListener('click', groupSelection);
+      panelBody.appendChild(groupBtn);
+
+      if (hasGroupedMember) {
+        const ungroupBtn = document.createElement('button');
+        ungroupBtn.className = 'btn';
+        ungroupBtn.type = 'button';
+        ungroupBtn.textContent = '그룹 해제';
+        ungroupBtn.addEventListener('click', ungroupSelection);
+        panelBody.appendChild(ungroupBtn);
+      }
+    }
+
+    const hintP = document.createElement('p');
+    hintP.style.cssText = 'font-size:12px;color:var(--text-muted);margin:0;';
+    hintP.textContent = 'Shift+클릭으로 선택을 추가·제거하거나 Shift+드래그로 영역을 지정해 여러 요소를 한꺼번에 담을 수 있습니다. 선택된 노드를 드래그하면 함께 이동합니다. 그룹으로 묶으면 이후 아무 멤버나 클릭해도 전체가 함께 선택됩니다.';
+    panelBody.appendChild(hintP);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'danger-btn';
+    delBtn.textContent = `선택한 ${multiSelection.length}개 삭제`;
+    delBtn.addEventListener('click', deleteSelection);
+    panelBody.appendChild(delBtn);
+  }
+
   function field(labelText, buildInput) {
     const wrap = document.createElement('div');
     wrap.className = 'field';
@@ -1167,7 +1495,7 @@
     const edgeGroup = target.closest && target.closest('.edge');
     const world = worldFromEvent(evt);
 
-    if (['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'].includes(tool)) {
+    if (SHAPE_TOOLS.includes(tool)) {
       const placedShape = tool;
       const created = addNode(placedShape, world.x, world.y);
       setTool('select');
@@ -1216,9 +1544,56 @@
       canvas.setPointerCapture(evt.pointerId);
       return;
     }
+    // Shift+클릭: 항목을 다중 선택 목록에 토글 (드래그는 시작하지 않음).
+    if (evt.shiftKey && nodeGroup) {
+      toggleMultiSelect('node', nodeGroup.dataset.id);
+      return;
+    }
+    if (evt.shiftKey && edgeGroup) {
+      toggleMultiSelect('edge', edgeGroup.dataset.id);
+      return;
+    }
+    // Shift+빈 곳 드래그: 사각 영역(마퀴)으로 여러 노드를 한꺼번에 담는다.
+    if (evt.shiftKey && !nodeGroup && !edgeGroup) {
+      const rect = svgEl('rect', { x: world.x, y: world.y, width: 0, height: 0, class: 'marquee-rect' });
+      overlayLayer.appendChild(rect);
+      drag = { type: 'marquee', start: world, el: rect };
+      canvas.setPointerCapture(evt.pointerId);
+      return;
+    }
     if (nodeGroup) {
       const node = state.nodes.find(n => n.id === nodeGroup.dataset.id);
       if (!node) return;
+      // 그룹으로 묶인 노드는 (Shift 없이) 하나만 눌러도 그룹 전체가 선택된다.
+      if (node.groupId) {
+        const members = state.nodes.filter(n => n.groupId === node.groupId);
+        if (members.length >= 2) {
+          multiSelection = members.map(n => ({ type: 'node', id: n.id }));
+          selection = { type: null, id: null };
+        } else {
+          // 멤버가 하나뿐이면 의미 없는 그룹이니 정리하고 평범한 단일 선택으로.
+          delete node.groupId;
+          multiSelection = [];
+          selection = { type: 'node', id: node.id };
+        }
+        render();
+        updatePanel();
+      }
+      // 이미 다중 선택된(혹은 방금 그룹 전체가 선택된) 노드를 (Shift 없이) 누르면
+      // 선택 그룹 전체를 함께 드래그할 수 있게 한다 — 임시 다중 선택은 움직이지
+      // 않고 떼면 그 노드 하나로 선택이 좁혀지고, 정식 그룹은 그대로 유지된다.
+      if (multiSelection.length >= 2 && isMultiSelected('node', node.id)) {
+        const offsets = multiSelection
+          .filter(it => it.type === 'node')
+          .map(it => {
+            const n = state.nodes.find(x => x.id === it.id);
+            return n ? { id: n.id, offX: world.x - n.x, offY: world.y - n.y } : null;
+          })
+          .filter(Boolean);
+        drag = { type: 'move-multi', offsets, clickedId: node.id, moved: false, isGroup: !!node.groupId };
+        canvas.setPointerCapture(evt.pointerId);
+        return;
+      }
       selectItem('node', node.id);
       if (checkDoubleClick('node', node.id)) { startInlineEdit('node', node.id); return; }
       drag = { type: 'move', id: node.id, offX: world.x - node.x, offY: world.y - node.y, moved: false };
@@ -1277,16 +1652,67 @@
       edge.bend = relX * drag.perp.x + relY * drag.perp.y;
       const el = edgesLayer.querySelector(`.edge[data-id="${edge.id}"]`);
       if (el) el.replaceWith(buildEdgeEl(edge));
+    } else if (drag.type === 'move-multi') {
+      const world = worldFromEvent(evt);
+      drag.moved = true;
+      for (const off of drag.offsets) {
+        const node = state.nodes.find(n => n.id === off.id);
+        if (!node) continue;
+        node.x = world.x - off.offX;
+        node.y = world.y - off.offY;
+        const g = nodesLayer.querySelector(`.node[data-id="${node.id}"]`);
+        if (g) g.setAttribute('transform', `translate(${node.x} ${node.y})`);
+        updateEdgesTouching(node.id);
+      }
+    } else if (drag.type === 'marquee') {
+      const world = worldFromEvent(evt);
+      const x = Math.min(drag.start.x, world.x), y = Math.min(drag.start.y, world.y);
+      const w = Math.abs(world.x - drag.start.x), h = Math.abs(world.y - drag.start.y);
+      setAttrs(drag.el, { x, y, width: w, height: h });
     }
   });
 
   function endDrag(evt) {
     if (!drag) return;
-    const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'bend';
+    const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'bend' || (drag.type === 'move-multi' && drag.moved);
     const wasBend = drag.type === 'bend';
+    const finishedDrag = drag;
     canvas.classList.remove('panning');
     try { canvas.releasePointerCapture(evt.pointerId); } catch (e) {}
     drag = null;
+
+    if (finishedDrag.type === 'move-multi') {
+      if (!finishedDrag.moved && !finishedDrag.isGroup) {
+        // 그냥 클릭이었다면(안 움직였으면) 임시 다중 선택은 그 노드 하나로 좁힌다.
+        // 단, 영구 그룹은 클릭만 해도 전체가 계속 선택된 상태를 유지한다.
+        selectItem('node', finishedDrag.clickedId);
+      }
+    } else if (finishedDrag.type === 'marquee') {
+      const x = parseFloat(finishedDrag.el.getAttribute('x'));
+      const y = parseFloat(finishedDrag.el.getAttribute('y'));
+      const w = parseFloat(finishedDrag.el.getAttribute('width'));
+      const h = parseFloat(finishedDrag.el.getAttribute('height'));
+      finishedDrag.el.remove();
+      // 노드 중심점이 마퀴 영역 안에 들어오면 선택 — 살짝 스친 정도로는 안 딸려오게.
+      const picked = state.nodes
+        .filter(n => {
+          const c = nodeCenter(n);
+          return c.x >= x && c.x <= x + w && c.y >= y && c.y <= y + h;
+        })
+        .map(n => ({ type: 'node', id: n.id }));
+      if (picked.length >= 2) {
+        multiSelection = picked;
+        selection = { type: null, id: null };
+      } else if (picked.length === 1) {
+        selection = { type: 'node', id: picked[0].id };
+        multiSelection = [];
+      } else {
+        clearSelection();
+      }
+      render();
+      updatePanel();
+    }
+
     if (wasStructural) pushHistory();
     // 곡률을 드래그하는 동안은 패널을 건드리지 않다가, 끝나면 "직선으로 펴기"
     // 버튼이 새 bend 값에 맞춰 나타나도록 패널을 갱신한다.
@@ -1317,9 +1743,9 @@
       btn.setAttribute('aria-pressed', String(btn.dataset.tool === name));
     });
     canvas.classList.toggle('tool-connect', name === 'connect');
-    canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'].includes(name));
+    canvas.classList.toggle('tool-add', SHAPE_TOOLS.includes(name));
     const hints = {
-      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
+      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. Shift+클릭이나 Shift+드래그로 여러 요소를 한꺼번에 선택할 수 있습니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
       circle: '캔버스를 클릭해 원형 노드를 추가하세요.',
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
@@ -1332,8 +1758,33 @@
     render();
   }
 
+  // 모바일(좁은 화면)에서 도형 도구를 탭하면, 캔버스를 다시 탭하지 않고
+  // 바로 화면 가운데에 노드를 놓는다 — 확대/축소했던 배율도 기본값(100%)으로
+  // 되돌리되, 방금 보던 자리가 그대로 화면 중앙에 오도록 축척만 바꾼다.
+  // (작은 화면에서 정확한 위치를 두 번 탭해 지정하기 어렵기 때문 — 놓은 뒤
+  // 손가락으로 끌어 원하는 위치로 옮기는 편이 더 쉽다.)
+  function addNodeMobileCentered(shape) {
+    // 먼저 select 도구로 전환해 하단 힌트 문구를 최종 상태로 안정시킨다 — 안
+    // 그러면 지금 이 도구의 짧은 힌트 문구 높이 기준으로 중앙을 계산했다가,
+    // select 힌트 문구가 더 길어 줄바꿈되며 캔버스 높이가 바뀌어 살짝 어긋난다.
+    setTool('select');
+    const rect = canvasWrap.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const worldCenter = { x: (cx - view.x) / view.scale, y: (cy - view.y) / view.scale };
+    view.scale = 1;
+    view.x = cx - worldCenter.x * view.scale;
+    view.y = cy - worldCenter.y * view.scale;
+    applyViewTransform();
+    const created = addNode(shape, worldCenter.x, worldCenter.y);
+    if (shape === 'text' || shape === 'loop' || shape === 'bubble') startInlineEdit('node', created.id);
+  }
+
   document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
-    btn.addEventListener('click', () => setTool(btn.dataset.tool));
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.tool;
+      if (SHAPE_TOOLS.includes(t) && isMobileViewport()) addNodeMobileCentered(t);
+      else setTool(t);
+    });
   });
 
   document.getElementById('btnDelete').addEventListener('click', deleteSelection);
@@ -1372,15 +1823,30 @@
   const archetypeMenu = document.getElementById('archetypeMenu');
   for (const tpl of ARCHETYPE_TEMPLATES) {
     const btn = document.createElement('button');
+    const nameRow = document.createElement('span');
+    nameRow.className = 'archetype-name-row';
     const nameEl = document.createElement('span');
     nameEl.className = 'archetype-name';
     nameEl.textContent = tpl.name;
+    nameRow.appendChild(nameEl);
+    if (!tpl.implemented) {
+      const badge = document.createElement('span');
+      badge.className = 'archetype-badge';
+      badge.textContent = '구현중';
+      nameRow.appendChild(badge);
+    }
     const subEl = document.createElement('span');
     subEl.className = 'archetype-subtitle';
     subEl.textContent = tpl.subtitle;
-    btn.appendChild(nameEl);
+    btn.appendChild(nameRow);
     btn.appendChild(subEl);
-    btn.addEventListener('click', () => { insertTemplate(tpl); archetypeMenu.hidden = true; });
+    if (tpl.implemented) {
+      btn.addEventListener('click', () => { insertTemplate(tpl); archetypeMenu.hidden = true; });
+    } else {
+      // 아직 다듬는 중인 원형 — 목록에는 보이되 선택은 막아둔다.
+      btn.disabled = true;
+      btn.classList.add('archetype-disabled');
+    }
     archetypeMenu.appendChild(btn);
   }
   document.getElementById('btnArchetype').addEventListener('click', (e) => {
@@ -1559,7 +2025,7 @@
     if (evt.key === 'Insert' && selection.type === 'node') { evt.preventDefault(); duplicateConnected(selection.id); return; }
 
     const arrowDirs = { ArrowRight: 'right', ArrowLeft: 'left', ArrowDown: 'down', ArrowUp: 'up' };
-    if (arrowDirs[evt.key] && state.nodes.length > 0) {
+    if (arrowDirs[evt.key] && state.nodes.length > 0 && multiSelection.length < 2) {
       evt.preventDefault();
       moveSelectionByArrow(arrowDirs[evt.key]);
       return;
