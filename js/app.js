@@ -24,6 +24,9 @@
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
   const FONT_STACK = '-apple-system, "Apple SD Gothic Neo", "Segoe UI", Roboto, sans-serif';
+  const SHAPE_TOOLS = ['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'];
+  // 툴바가 아이콘만 남는 좁은 화면(css의 720px 분기와 동일 기준)을 "모바일"로 취급한다.
+  function isMobileViewport() { return window.matchMedia('(max-width: 720px)').matches; }
   const NODE_DEFAULT_SIZES = { rect: [150, 90], circle: [110, 110], diamond: [140, 100], bubble: [180, 120] };
   const NODE_DEFAULT_LABELS = { rect: '시스템', circle: '사용자', diamond: '분기', text: '텍스트', loop: 'R1', bubble: '말풍선' };
   // 말풍선(주석용 회색 노드)은 사각형/원/마름모와 다른 기본 배색을 쓴다.
@@ -1325,7 +1328,7 @@
     const edgeGroup = target.closest && target.closest('.edge');
     const world = worldFromEvent(evt);
 
-    if (['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'].includes(tool)) {
+    if (SHAPE_TOOLS.includes(tool)) {
       const placedShape = tool;
       const created = addNode(placedShape, world.x, world.y);
       setTool('select');
@@ -1556,7 +1559,7 @@
       btn.setAttribute('aria-pressed', String(btn.dataset.tool === name));
     });
     canvas.classList.toggle('tool-connect', name === 'connect');
-    canvas.classList.toggle('tool-add', ['rect', 'circle', 'diamond', 'text', 'loop', 'bubble'].includes(name));
+    canvas.classList.toggle('tool-add', SHAPE_TOOLS.includes(name));
     const hints = {
       select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. Shift+클릭이나 Shift+드래그로 여러 요소를 한꺼번에 선택할 수 있습니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
@@ -1571,8 +1574,33 @@
     render();
   }
 
+  // 모바일(좁은 화면)에서 도형 도구를 탭하면, 캔버스를 다시 탭하지 않고
+  // 바로 화면 가운데에 노드를 놓는다 — 확대/축소했던 배율도 기본값(100%)으로
+  // 되돌리되, 방금 보던 자리가 그대로 화면 중앙에 오도록 축척만 바꾼다.
+  // (작은 화면에서 정확한 위치를 두 번 탭해 지정하기 어렵기 때문 — 놓은 뒤
+  // 손가락으로 끌어 원하는 위치로 옮기는 편이 더 쉽다.)
+  function addNodeMobileCentered(shape) {
+    // 먼저 select 도구로 전환해 하단 힌트 문구를 최종 상태로 안정시킨다 — 안
+    // 그러면 지금 이 도구의 짧은 힌트 문구 높이 기준으로 중앙을 계산했다가,
+    // select 힌트 문구가 더 길어 줄바꿈되며 캔버스 높이가 바뀌어 살짝 어긋난다.
+    setTool('select');
+    const rect = canvasWrap.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const worldCenter = { x: (cx - view.x) / view.scale, y: (cy - view.y) / view.scale };
+    view.scale = 1;
+    view.x = cx - worldCenter.x * view.scale;
+    view.y = cy - worldCenter.y * view.scale;
+    applyViewTransform();
+    const created = addNode(shape, worldCenter.x, worldCenter.y);
+    if (shape === 'text' || shape === 'loop' || shape === 'bubble') startInlineEdit('node', created.id);
+  }
+
   document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
-    btn.addEventListener('click', () => setTool(btn.dataset.tool));
+    btn.addEventListener('click', () => {
+      const t = btn.dataset.tool;
+      if (SHAPE_TOOLS.includes(t) && isMobileViewport()) addNodeMobileCentered(t);
+      else setTool(t);
+    });
   });
 
   document.getElementById('btnDelete').addEventListener('click', deleteSelection);
