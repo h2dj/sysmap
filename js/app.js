@@ -2023,6 +2023,23 @@
     if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelection(); return; }
     if (evt.key === 'Escape') { clearSelection(); setTool('select'); return; }
     if (evt.key === 'Insert' && selection.type === 'node') { evt.preventDefault(); duplicateConnected(selection.id); return; }
+    // F2: 더블클릭과 동일하게 선택된 노드·연결선의 텍스트를 바로 편집 모드로 연다.
+    if (evt.key === 'F2' && selection.type) { evt.preventDefault(); startInlineEdit(selection.type, selection.id); return; }
+
+    if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'g') {
+      evt.preventDefault();
+      // Ctrl+G: 선택한 노드가 이미 그룹에 속해 있으면 해제, 아니면(2개 이상일 때) 새로 그룹으로 묶는다.
+      const nodeItems = multiSelection.length
+        ? multiSelection.filter(it => it.type === 'node')
+        : (selection.type === 'node' ? [selection] : []);
+      const hasGrouped = nodeItems.some(it => {
+        const n = state.nodes.find(x => x.id === it.id);
+        return n && n.groupId;
+      });
+      if (hasGrouped) ungroupSelection();
+      else if (nodeItems.length >= 2) groupSelection();
+      return;
+    }
 
     const arrowDirs = { ArrowRight: 'right', ArrowLeft: 'left', ArrowDown: 'down', ArrowUp: 'up' };
     if (arrowDirs[evt.key] && state.nodes.length > 0 && multiSelection.length < 2) {
