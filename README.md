@@ -13,6 +13,10 @@ JSON/SVG/PNG 파일로 내보내거나 다시 불러올 수 있습니다.
   누구나 접속해 지도를 그릴 수 있습니다. `.github/workflows/deploy.yml` 워크플로가 `main`
   브랜치에 푸시될 때마다 자동으로 GitHub Pages에 배포합니다.
   (저장소 Settings → Pages → Source를 "GitHub Actions"로 설정하면 활성화됩니다.)
+- **브랜치 자동 PR·병합**: `.github/workflows/auto-pr-merge.yml` 워크플로가 `claude/*`
+  브랜치에 푸시될 때마다 `main`으로 향하는 PR을 자동으로 만들거나(이미 열려 있으면 재사용)
+  즉시 병합한 뒤 GitHub Pages 재배포까지 트리거합니다. 검토 없이 바로 병합되므로, 사람이
+  직접 리뷰해야 하는 변경이라면 이 워크플로를 끄거나 브랜치 보호 규칙을 추가해야 합니다.
 
 ## 주요 기능
 
