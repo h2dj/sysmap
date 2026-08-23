@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - 'claude/**'
+  workflow_dispatch: {}
 
 permissions:
   contents: write
