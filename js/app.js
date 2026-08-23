@@ -1865,7 +1865,8 @@
   document.addEventListener('click', () => { exportMenu.hidden = true; archetypeMenu.hidden = true; });
 
   document.getElementById('btnExportJson').addEventListener('click', () => {
-    downloadBlob(JSON.stringify(state, null, 2), `${safeName(state.title)}.json`, 'application/json');
+    exportFile(`${exportBaseName()}.json`, 'JSON 파일', { 'application/json': ['.json'] },
+      () => new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }));
   });
   document.getElementById('btnExportSvg').addEventListener('click', exportSVG);
   document.getElementById('btnExportPng').addEventListener('click', exportPNG);
@@ -1897,11 +1898,50 @@
     return (name || 'sysmap').trim().replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || 'sysmap';
   }
 
-  function downloadBlob(content, filename, mime) {
-    const blob = new Blob([content], { type: mime });
+  // 내보내기 파일 이름 기본값: 사각형 노드가 정확히 하나뿐이면 그 노드의 텍스트를 쓰고,
+  // 그 외(사각형이 없거나 여러 개거나 텍스트가 비어있는 경우)에는 지도 제목을 그대로 쓴다.
+  function exportBaseName() {
+    const rectNodes = state.nodes.filter(n => n.shape === 'rect');
+    if (rectNodes.length === 1 && rectNodes[0].label && rectNodes[0].label.trim()) {
+      return safeName(rectNodes[0].label);
+    }
+    return safeName(state.title);
+  }
+
+  // 내보내기 파일을 저장한다. 지원하는 브라우저(Chrome/Edge 등)에서는
+  // showSaveFilePicker로 네이티브 "다른 이름으로 저장" 대화상자를 띄워 사용자가 위치·파일명을
+  // 직접 고를 수 있게 하고, 지원하지 않는 브라우저(Firefox, Safari 등)에서는 기존처럼
+  // <a download> 방식으로 즉시 다운로드한다.
+  // buildBlob: () => Blob | Promise<Blob> — 사용자 제스처가 만료되기 전에 대화상자부터 띄우기
+  // 위해 blob 생성은 대화상자를 연 "이후"에 수행한다.
+  async function exportFile(suggestedName, description, accept, buildBlob) {
+    if (window.showSaveFilePicker) {
+      let handle = null;
+      try {
+        handle = await window.showSaveFilePicker({
+          suggestedName,
+          types: [{ description, accept }],
+        });
+      } catch (err) {
+        if (err && err.name === 'AbortError') return; // 사용자가 대화상자를 취소함
+        handle = null; // 다른 오류(예: 미지원 컨텍스트)면 기존 다운로드 방식으로 대체
+      }
+      if (handle) {
+        try {
+          const blob = await buildBlob();
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+        } catch (err) {
+          alert('파일을 저장하는 중 오류가 발생했습니다.');
+        }
+        return;
+      }
+    }
+    const blob = await buildBlob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = filename;
+    a.href = url; a.download = suggestedName;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
@@ -1955,33 +1995,39 @@
   }
 
   function exportSVG() {
-    const { src } = buildExportSvgString();
-    downloadBlob('<?xml version="1.0" standalone="no"?>\r\n' + src, `${safeName(state.title)}.svg`, 'image/svg+xml');
+    exportFile(`${exportBaseName()}.svg`, 'SVG 파일', { 'image/svg+xml': ['.svg'] }, () => {
+      const { src } = buildExportSvgString();
+      return new Blob(['<?xml version="1.0" standalone="no"?>\r\n' + src], { type: 'image/svg+xml' });
+    });
+  }
+
+  // buildExportSvgString()으로 만든 SVG를 캔버스에 그려 PNG Blob으로 변환한다 (Promise).
+  function buildPngBlob() {
+    return new Promise((resolve, reject) => {
+      const { src, w, h } = buildExportSvgString();
+      const scaleFactor = 2;
+      const img = new Image();
+      const svgBlob = new Blob([src], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      img.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = w * scaleFactor; c.height = h * scaleFactor;
+        const ctx = c.getContext('2d');
+        ctx.scale(scaleFactor, scaleFactor);
+        ctx.drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        c.toBlob((blob) => {
+          if (blob) resolve(blob); else reject(new Error('PNG 변환 실패'));
+        }, 'image/png');
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('이미지 로드 실패')); };
+      img.src = url;
+    });
   }
 
   function exportPNG() {
-    const { src, w, h } = buildExportSvgString();
-    const scaleFactor = 2;
-    const img = new Image();
-    const svgBlob = new Blob([src], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(svgBlob);
-    img.onload = () => {
-      const c = document.createElement('canvas');
-      c.width = w * scaleFactor; c.height = h * scaleFactor;
-      const ctx = c.getContext('2d');
-      ctx.scale(scaleFactor, scaleFactor);
-      ctx.drawImage(img, 0, 0, w, h);
-      URL.revokeObjectURL(url);
-      c.toBlob((blob) => {
-        const purl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = purl; a.download = `${safeName(state.title)}.png`;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(purl), 2000);
-      }, 'image/png');
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); alert('PNG로 내보내는 중 오류가 발생했습니다.'); };
-    img.src = url;
+    exportFile(`${exportBaseName()}.png`, 'PNG 이미지', { 'image/png': ['.png'] }, buildPngBlob)
+      .catch(() => alert('PNG로 내보내는 중 오류가 발생했습니다.'));
   }
 
   // ===========================================================================================
@@ -2023,6 +2069,23 @@
     if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelection(); return; }
     if (evt.key === 'Escape') { clearSelection(); setTool('select'); return; }
     if (evt.key === 'Insert' && selection.type === 'node') { evt.preventDefault(); duplicateConnected(selection.id); return; }
+    // F2: 더블클릭과 동일하게 선택된 노드·연결선의 텍스트를 바로 편집 모드로 연다.
+    if (evt.key === 'F2' && selection.type) { evt.preventDefault(); startInlineEdit(selection.type, selection.id); return; }
+
+    if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'g') {
+      evt.preventDefault();
+      // Ctrl+G: 선택한 노드가 이미 그룹에 속해 있으면 해제, 아니면(2개 이상일 때) 새로 그룹으로 묶는다.
+      const nodeItems = multiSelection.length
+        ? multiSelection.filter(it => it.type === 'node')
+        : (selection.type === 'node' ? [selection] : []);
+      const hasGrouped = nodeItems.some(it => {
+        const n = state.nodes.find(x => x.id === it.id);
+        return n && n.groupId;
+      });
+      if (hasGrouped) ungroupSelection();
+      else if (nodeItems.length >= 2) groupSelection();
+      return;
+    }
 
     const arrowDirs = { ArrowRight: 'right', ArrowLeft: 'left', ArrowDown: 'down', ArrowUp: 'up' };
     if (arrowDirs[evt.key] && state.nodes.length > 0 && multiSelection.length < 2) {
