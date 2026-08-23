@@ -1,0 +1,61 @@
+name: 브랜치 푸시 시 PR 자동 생성·병합
+
+# claude/* 브랜치에 푸시할 때마다 main으로 향하는 PR을 자동으로 열고(이미 열려
+# 있으면 재사용), 곧바로 병합한 뒤 GitHub Pages 재배포를 트리거합니다.
+on:
+  push:
+    branches:
+      - 'claude/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: auto-pr-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  auto-pr-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: main 대비 변경 사항 확인
+        id: diff
+        run: |
+          git fetch origin main
+          echo "ahead=$(git rev-list --count origin/main..HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: PR 찾기 또는 생성
+        if: steps.diff.outputs.ahead != '0'
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          NUMBER=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$NUMBER" ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "$BRANCH" \
+              --body "\`$BRANCH\` 브랜치의 변경 사항을 \`main\`으로 병합하는 자동 생성 PR입니다."
+            NUMBER=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number')
+          fi
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: PR 자동 병합
+        if: steps.diff.outputs.ahead != '0' && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge "${{ steps.pr.outputs.number }}" --squash
+
+      - name: GitHub Pages 재배포 트리거
+        if: steps.diff.outputs.ahead != '0' && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy.yml --ref main
