@@ -627,21 +627,26 @@
       id: 'success-to-successful',
       name: '성공한 쪽에 몰아주기',
       subtitle: '한쪽에 자원이 쏠릴수록 다른 쪽의 성공 기회가 줄어드는 구조',
-      implemented: false,
+      implemented: true,
       build() {
         return {
           nodes: [
-            tNode('aSuccess', 'text', 'A의 성공', 0, 0),
-            tNode('alloc', 'rect', 'B 대신 A에게 자원이 할당됨', 320, 0),
-            tNode('bSuccess', 'text', 'B의 성공', 640, 0),
-            tNode('r1', 'loop', 'R1', 160, 0, 'R'),
-            tNode('r2', 'loop', 'R2', 480, 0, 'R'),
+            tNode('alloc', 'rect', 'B대신 A에게 자원이 할당됨', 362, 147),
+            tNode('bSuccess', 'text', 'B의 성공', 598, 147),
+            tNode('aSuccess', 'text', 'A의 성공', 113, 147),
+            tNode('r1', 'loop', 'R1', 212, 146, 'R'),
+            tNode('r2', 'loop', 'R2', 502, 147, 'R'),
+            tNode('increase', 'text', '점차 증가', 73, 186),
+            tNode('decrease', 'text', '점차 감소', 624, 190),
           ],
+          // R1(강화 루프)은 A 쪽에서 자원 배분과 A의 성공이 서로를 밀어올리고, R2(강화 루프)는
+          // B 쪽에서 같은 자원을 두고 반대 방향으로 서로를 끌어내려, 한쪽(A)이 점차 늘고
+          // 다른 쪽(B)은 점차 줄어드는 비대칭이 벌어짐을 보여준다.
           edges: [
-            tEdge('aSuccess', 'alloc', { bend: 45 }),
-            tEdge('alloc', 'aSuccess', { bend: 45 }),
-            tEdge('bSuccess', 'alloc', { bend: 45 }),
-            tEdge('alloc', 'bSuccess', { bend: 45 }),
+            tEdge('alloc', 'bSuccess', { bend: -121 }),
+            tEdge('alloc', 'aSuccess', { bend: -103 }),
+            tEdge('bSuccess', 'alloc', { bend: -112 }),
+            tEdge('aSuccess', 'alloc', { bend: -122 }),
           ],
         };
       },
