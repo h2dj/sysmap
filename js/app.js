@@ -888,6 +888,152 @@
     pushHistory();
   }
 
+  // ---- 순환 구조(고리) 만들기 --------------------------------------------------------------------
+  // 선택한 노드들을 화면상 위치(가로로 더 넓게 퍼져 있으면 x, 세로로 더 퍼져 있으면 y) 순서로
+  // "사슬"로 간주해, 맨 끝(마지막) 노드에서 맨 앞(처음) 노드로 향하는 연결을 새로 만든다.
+  function chainAxisIsHorizontal(nodes) {
+    const minX = Math.min(...nodes.map(n => n.x)), maxX = Math.max(...nodes.map(n => n.x + n.w));
+    const minY = Math.min(...nodes.map(n => n.y)), maxY = Math.max(...nodes.map(n => n.y + n.h));
+    return (maxX - minX) >= (maxY - minY);
+  }
+  function orderNodesByPosition(nodes) {
+    const horizontal = chainAxisIsHorizontal(nodes);
+    return [...nodes].sort((a, b) => {
+      const ca = nodeCenter(a), cb = nodeCenter(b);
+      return horizontal ? ca.x - cb.x : ca.y - cb.y;
+    });
+  }
+  // 선택한 노드들 사이에 실제로 그어진 연결선만 모아, 그것이 정확히 하나의 사슬(각 노드가
+  // 이웃 1~2개, 끝 2개는 이웃 1개)을 이루는지 확인한다. 이루면 그 연결 순서를 그대로 따르고
+  // (양방향 연결은 이웃 하나로 취급), 아니라면(가지가 있거나 끊겨 있는 등) 기존처럼 화면
+  // 위치 순서로 대신한다 — 위치만으로는 노드들이 가로세로로 애매하게 놓였을 때 실제 연결
+  // 순서와 어긋나 고리가 서로 겹치며 꼬일 수 있어, 실제 연결 정보가 있으면 그걸 우선한다.
+  function orderNodesByChain(nodes) {
+    const idSet = new Set(nodes.map(n => n.id));
+    const neighbors = new Map(nodes.map(n => [n.id, new Set()]));
+    for (const e of state.edges) {
+      if (e.from === e.to || !idSet.has(e.from) || !idSet.has(e.to)) continue;
+      neighbors.get(e.from).add(e.to);
+      neighbors.get(e.to).add(e.from);
+    }
+    const endpoints = nodes.filter(n => neighbors.get(n.id).size === 1);
+    const isSimplePath = endpoints.length === 2 && nodes.every(n => {
+      const d = neighbors.get(n.id).size;
+      return d === 1 || d === 2;
+    });
+    if (isSimplePath) {
+      const byId = new Map(nodes.map(n => [n.id, n]));
+      const order = [endpoints[0].id];
+      const visited = new Set(order);
+      let prev = null, cur = endpoints[0].id;
+      while (true) {
+        const next = [...neighbors.get(cur)].find(id => id !== prev && !visited.has(id));
+        if (next === undefined) break;
+        order.push(next);
+        visited.add(next);
+        prev = cur;
+        cur = next;
+      }
+      if (order.length === nodes.length) {
+        const chain = order.map(id => byId.get(id));
+        const a = chain[0], b = chain[chain.length - 1];
+        const horizontal = chainAxisIsHorizontal(nodes);
+        const ca = nodeCenter(a), cb = nodeCenter(b);
+        const aIsFirst = horizontal ? ca.x <= cb.x : ca.y <= cb.y;
+        return aIsFirst ? chain : chain.slice().reverse();
+      }
+    }
+    return orderNodesByPosition(nodes);
+  }
+  function makeChainEdge(fromId, toId) {
+    return {
+      id: uid(), from: fromId, to: toId, label: '',
+      dashed: false, arrowStart: false, arrowEnd: true,
+      bend: 0, delay: false, polarity: '', bubble: false,
+    };
+  }
+  // 두 노드 사이의 연결선 두 개(정방향·역방향)가 서로 반대쪽으로 휘어 렌즈(원) 모양을
+  // 이루도록 같은 부호의 곡률을 준다 — edgeAnchorPoints()의 계산 방식상, 방향이 반대인
+  // 두 연결선에 같은 bend 값을 주면 저절로 반대 방향으로 벌어진다 (강화 루프 원형 템플릿과 동일한 원리).
+  function closeLoopPair(first, last) {
+    let forward = state.edges.find(e => e.from === first.id && e.to === last.id);
+    let backward = state.edges.find(e => e.from === last.id && e.to === first.id);
+    if (backward) return; // 이미 고리로 닫혀 있음 — 할 일 없음
+    const dist = Math.hypot(nodeCenter(last).x - nodeCenter(first).x, nodeCenter(last).y - nodeCenter(first).y);
+    const mag = clamp(dist * 0.3, 30, 130);
+    if (!forward) {
+      forward = makeChainEdge(first.id, last.id);
+      state.edges.push(forward);
+    }
+    backward = makeChainEdge(last.id, first.id);
+    state.edges.push(backward);
+    forward.bend = mag;
+    backward.bend = mag;
+  }
+
+  // 노드 3개 이상: 선택한 노드들을 원 둘레에 고르게 재배치하고, 이웃한 노드끼리의 연결선을
+  // 모두 원 중심 바깥쪽으로 휘게 만들어 전체적으로 둥근 고리 모양이 되게 한다. 마지막 노드에서
+  // 처음 노드로 이어지는 연결이 없으면 새로 만들어 고리를 닫는다.
+  function closeLoopRing(ordered) {
+    const count = ordered.length;
+    let cx = 0, cy = 0;
+    for (const n of ordered) { const c = nodeCenter(n); cx += c.x; cy += c.y; }
+    cx /= count; cy /= count;
+    const center = { x: cx, y: cy };
+
+    const avgSpan = ordered.reduce((s, n) => s + Math.max(n.w, n.h), 0) / count;
+    const gap = 70;
+    const radius = Math.max(160, (count * (avgSpan + gap)) / (2 * Math.PI));
+
+    const startAngle = -Math.PI / 2; // 12시 방향부터 시계 방향으로 배치
+    ordered.forEach((n, i) => {
+      const angle = startAngle + (i * 2 * Math.PI) / count;
+      const px = cx + radius * Math.cos(angle), py = cy + radius * Math.sin(angle);
+      n.x = px - n.w / 2;
+      n.y = py - n.h / 2;
+    });
+
+    const bendMag = clamp(radius * 0.35, 26, 110);
+    // 연결선의 제어점이 원 중심에서 먼 쪽(바깥쪽)으로 밀리도록 곡률 부호를 기하학적으로 계산한다
+    // (연결 방향이 반대여도 항상 같은 물리적 바깥쪽으로 휘게 됨 — edgeAnchorPoints()와 동일한
+    // 수직 벡터 공식을 그대로 써서 부호만 바깥쪽 기준으로 다시 정한다).
+    function bendOutward(edge, from, to, factor) {
+      const cF = nodeCenter(from), cT = nodeCenter(to);
+      const midx = (cF.x + cT.x) / 2, midy = (cF.y + cT.y) / 2;
+      const dxC = cT.x - cF.x, dyC = cT.y - cF.y;
+      const lenC = Math.hypot(dxC, dyC) || 1;
+      const pxC = -dyC / lenC, pyC = dxC / lenC;
+      const outX = midx - center.x, outY = midy - center.y;
+      const sign = (outX * pxC + outY * pyC) >= 0 ? 1 : -1;
+      edge.bend = sign * bendMag * factor;
+    }
+
+    for (let i = 0; i < count; i++) {
+      const a = ordered[i], b = ordered[(i + 1) % count];
+      let fwd = state.edges.find(e => e.from === a.id && e.to === b.id);
+      const bwd = state.edges.find(e => e.from === b.id && e.to === a.id);
+      const isClosingGap = i === count - 1; // 마지막 -> 처음 구간
+      if (!fwd && !bwd) {
+        if (!isClosingGap) continue; // 사슬 중간이 끊겨 있으면 손대지 않는다 (전제조건 밖)
+        fwd = makeChainEdge(a.id, b.id); // 요청하신 "고리 닫기" 연결을 새로 만든다
+        state.edges.push(fwd);
+      }
+      if (fwd) bendOutward(fwd, a, b, bwd ? 1.6 : 1);
+      if (bwd) bendOutward(bwd, b, a, 1);
+    }
+  }
+
+  function closeLoop() {
+    const nodes = multiSelection.filter(it => it.type === 'node')
+      .map(it => state.nodes.find(n => n.id === it.id)).filter(Boolean);
+    if (nodes.length < 2) return;
+    const ordered = orderNodesByChain(nodes);
+    if (ordered.length === 2) closeLoopPair(ordered[0], ordered[1]);
+    else closeLoopRing(ordered);
+    render();
+    pushHistory();
+  }
+
   // ===========================================================================================
   // Rendering
   // ===========================================================================================
@@ -1522,6 +1668,19 @@
         ungroupBtn.addEventListener('click', ungroupSelection);
         panelBody.appendChild(ungroupBtn);
       }
+
+      const loopLabel = document.createElement('p');
+      loopLabel.className = 'panel-section-label';
+      loopLabel.textContent = '순환 구조';
+      panelBody.appendChild(loopLabel);
+
+      const loopBtn = document.createElement('button');
+      loopBtn.className = 'btn';
+      loopBtn.type = 'button';
+      loopBtn.textContent = '고리 만들기';
+      loopBtn.title = '마지막 노드에서 첫 노드로 연결을 만들어 순환 구조로 바꿉니다 (Ctrl+Shift+L)';
+      loopBtn.addEventListener('click', closeLoop);
+      panelBody.appendChild(loopBtn);
     }
 
     const hintP = document.createElement('p');
@@ -2243,6 +2402,12 @@
       });
       if (hasGrouped) ungroupSelection();
       else if (nodeItems.length >= 2) groupSelection();
+      return;
+    }
+    // Ctrl+Shift+L: 선택한 노드 2개 이상을 순환 구조(고리)로 닫는다.
+    if ((evt.ctrlKey || evt.metaKey) && evt.shiftKey && evt.key.toLowerCase() === 'l') {
+      evt.preventDefault();
+      closeLoop();
       return;
     }
 
