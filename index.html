@@ -19,10 +19,7 @@
       <button id="btnNew" class="btn" title="새 탭에 빈 지도 열기">새 탭</button>
       <button id="btnImport" class="btn" title="JSON 파일을 새 탭으로 불러오기">불러오기</button>
       <input type="file" id="fileInput" accept="application/json,.json" hidden>
-      <!-- 시스템 원형 메뉴: 그래프 모양을 다시 다듬는 동안 임시로 숨김.
-           JS 쪽 코드(ARCHETYPE_TEMPLATES, insertTemplate 등)는 그대로 있으니
-           준비되면 이 div의 hidden만 지우면 다시 노출됨. -->
-      <div class="dropdown" hidden>
+      <div class="dropdown">
         <button id="btnArchetype" class="btn" title="자주 쓰는 시스템 원형(인과 지도 패턴)을 한 번에 삽입">시스템 원형 ▾</button>
         <div id="archetypeMenu" class="dropdown-menu archetype-menu" hidden></div>
       </div>
