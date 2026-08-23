@@ -88,6 +88,7 @@
   const STORAGE_KEY = 'sysmap.tabs.v1';
   const LEGACY_STORAGE_KEY = 'sysmap.autosave.v1';
   const THEME_KEY = 'sysmap.theme';
+  const DEFAULT_MAP_TITLE = '새 시스템 지도';
 
   // ---------------------------------------------------------------------
   // DOM refs
@@ -417,6 +418,7 @@
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
       el.appendChild(closeBtn);
       el.addEventListener('click', () => switchToTab(t.id));
+      el.addEventListener('dblclick', (e) => { e.stopPropagation(); startRenameTab(t.id); });
       tabBarEl.appendChild(el);
     }
     const addBtn = document.createElement('button');
@@ -437,6 +439,49 @@
     const title = state.title && state.title.trim() ? state.title.trim() : '제목 없음';
     if (el) el.textContent = title;
     if (parent) parent.title = title;
+  }
+
+  // 탭을 더블클릭하면 그 자리에서 이름을 바로 고칠 수 있다 (활성 탭이 아니어도 가능 —
+  // 그 경우 전환 없이 배경 탭의 저장된 상태만 바꾼다).
+  function startRenameTab(id) {
+    const t = tabs.find(x => x.id === id);
+    const el = tabBarEl && tabBarEl.querySelector(`.tab[data-id="${id}"]`);
+    if (!t || !el) return;
+    const labelEl = el.querySelector('.tab-label');
+    if (!labelEl) return;
+    const isActive = id === activeTabId;
+    const current = isActive ? state.title : t.state.title;
+    const input = document.createElement('input');
+    input.className = 'tab-rename-input';
+    input.type = 'text';
+    input.value = current || '';
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('click', (e) => e.stopPropagation());
+    labelEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (save) => {
+      if (done) return; done = true;
+      if (save) {
+        const newTitle = input.value.trim() || DEFAULT_MAP_TITLE;
+        if (isActive) {
+          state.title = newTitle;
+          mapTitleInput.value = newTitle;
+          pushHistory();
+        } else {
+          t.state.title = newTitle;
+          scheduleAutosave();
+        }
+      }
+      renderTabBar();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') finish(true);
+      else if (e.key === 'Escape') finish(false);
+      e.stopPropagation();
+    });
+    input.addEventListener('blur', () => finish(true));
   }
 
   // ===========================================================================================
@@ -2231,9 +2276,12 @@
     return (name || 'sysmap').trim().replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60) || 'sysmap';
   }
 
-  // 내보내기 파일 이름 기본값: 사각형 노드가 정확히 하나뿐이면 그 노드의 텍스트를 쓰고,
-  // 그 외(사각형이 없거나 여러 개거나 텍스트가 비어있는 경우)에는 지도 제목을 그대로 쓴다.
+  // 내보내기 파일 이름 기본값: 탭(지도) 이름을 기본값("새 시스템 지도")에서 직접 바꿔뒀다면
+  // 그 이름을 최우선으로 쓴다. 아직 이름을 따로 정하지 않았다면, 사각형 노드가 정확히
+  // 하나뿐일 때 그 노드의 텍스트를 쓰고, 그 외에는 지도 제목(기본값)을 그대로 쓴다.
   function exportBaseName() {
+    const title = (state.title || '').trim();
+    if (title && title !== DEFAULT_MAP_TITLE) return safeName(title);
     const rectNodes = state.nodes.filter(n => n.shape === 'rect');
     if (rectNodes.length === 1 && rectNodes[0].label && rectNodes[0].label.trim()) {
       return safeName(rectNodes[0].label);
