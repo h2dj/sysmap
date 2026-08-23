@@ -562,25 +562,31 @@
       id: 'shifting-the-burden',
       name: '부담 떠넘기기',
       subtitle: '임시방편의 부작용이 장기적 해결책을 약화시키는 구조',
-      implemented: false,
+      implemented: true,
       build() {
         return {
           nodes: [
-            tNode('problem', 'rect', '문제 현상', 0, 0),
-            tNode('fix', 'text', '임시방편', 300, -170),
-            tNode('longterm', 'text', '장기적인 해결책', 300, 170),
-            tNode('side', 'text', '부작용', 620, 0),
-            tNode('b1', 'loop', 'B1', 150, -90, 'B'),
-            tNode('b2', 'loop', 'B2', 150, 90, 'B'),
-            tNode('r3', 'loop', 'R3', 470, -90, 'R'),
+            tNode('problem', 'rect', '문제 현상', 267, 161),
+            tNode('fix', 'text', '임시 방편', 271, 27),
+            tNode('longterm', 'text', '장기적인 해결책', 265, 296),
+            tNode('b1', 'loop', 'B1', 267, 95, 'B'),
+            tNode('b2', 'loop', 'B2', 266, 227, 'B'),
+            tNode('sideeffect', 'text', '부작용', 442, 160),
+            tNode('r3', 'loop', 'R3', 380, 165, 'R'),
+            tNode('fixlabel', 'text', '현상만 다룰 수 있음', 144, 82),
+            tNode('longtermlabel', 'text', '더 근본적으로 접근가능', 128, 229),
           ],
+          // B1(균형 루프)은 위쪽에서 문제와 임시방편이 짧게 오가고, B2(균형 루프)는 아래쪽에서
+          // 문제와 장기적인 해결책이 지연을 두고 오간다. R3(강화 루프)는 임시방편의 부작용이
+          // 장기적인 해결책을 약화시키는 길을 그려 세 루프가 "문제 현상"·"임시 방편" 노드를
+          // 매개로 하나로 이어진다.
           edges: [
-            tEdge('problem', 'fix', { bend: 35 }),
-            tEdge('fix', 'problem', { bend: 35, label: '현상만 다룰 수 있음' }),
-            tEdge('problem', 'longterm', { bend: 35 }),
-            tEdge('longterm', 'problem', { bend: 35, label: '더 근본적으로 접근할 수 있음' }),
-            tEdge('fix', 'side', { bend: -25 }),
-            tEdge('side', 'longterm', { bend: -25, polarity: '-' }),
+            tEdge('problem', 'fix', { bend: 63 }),
+            tEdge('fix', 'problem', { bend: 69 }),
+            tEdge('problem', 'longterm', { bend: -66 }),
+            tEdge('longterm', 'problem', { bend: -67, delay: true }),
+            tEdge('fix', 'sideeffect', { bend: -61 }),
+            tEdge('sideeffect', 'longterm', { bend: -59 }),
           ],
         };
       },
