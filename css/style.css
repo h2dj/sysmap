@@ -110,6 +110,73 @@ body {
 .spacer { flex: 1; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 
+/* ===== Tab bar — 한 창에서 여러 지도를 열어두고 전환 ===== */
+#tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 12px;
+  max-width: 200px;
+  border-radius: 8px 8px 0 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.tab:hover { background: var(--surface); color: var(--text); }
+.tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.tab-close {
+  border: none;
+  background: none;
+  color: inherit;
+  opacity: 0.55;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.tab-close:hover { opacity: 1; background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.tab-add {
+  flex: 0 0 auto;
+  align-self: center;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin: 0 4px;
+}
+.tab-add:hover { background: var(--surface); color: var(--text); }
+
 .btn {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -200,6 +267,9 @@ body {
   flex: 1 1 auto;
   display: flex;
   min-height: 0;
+  /* 모바일 #propsPanel의 position:absolute가 뷰포트가 아니라 여기(상단바·탭바
+     아래)를 기준으로 배치되도록 포지셔닝 컨텍스트를 만든다. */
+  position: relative;
 }
 
 /* ===== Left toolbar ===== */
@@ -541,6 +611,12 @@ body {
   .spacer { flex-basis: 100%; height: 0; }
   .topbar-actions { flex-wrap: wrap; gap: 6px; }
   .btn { padding: 6px 9px; font-size: 12.5px; }
+
+  /* 탭이 여러 개면 가로로 넘치므로 옆으로 스크롤 — 각 탭은 손가락으로 짚기
+     편한 최소 너비를 유지하고, 줄바꿈 없이 한 줄로만 흐르게 한다. */
+  #tabbar { padding: 0 4px; }
+  .tab { max-width: 130px; padding: 8px 6px 8px 10px; }
+  .tab-label { font-size: 12px; }
 
   #toolbar { flex-basis: 64px; }
   .tool-btn span { display: none; }
