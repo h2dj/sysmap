@@ -536,23 +536,30 @@
       id: 'limits-to-growth',
       name: '성장의 한계',
       subtitle: '성장을 이끄는 행동이 결국 제약 요인에 부딪히는 구조',
-      implemented: false,
+      implemented: true,
       build() {
         return {
           nodes: [
-            tNode('action', 'text', '증가하는 행동', 0, 0),
-            tNode('perf', 'rect', '성과 또는 조건', 300, 0),
-            tNode('constraint', 'text', '제약하는 행동', 600, 0),
-            tNode('r1', 'loop', 'R1', 150, -60, 'R'),
-            tNode('b2', 'loop', 'B2', 450, -60, 'B'),
+            tNode('action', 'text', '증가하는 행동', 68, 105),
+            tNode('perf', 'rect', '성과 또는 조건', 339, 116),
+            tNode('constraint', 'text', '제약하는 행동', 615, 105),
+            tNode('r1', 'loop', 'R1', 195, 118, 'R'),
+            tNode('b2', 'loop', 'B2', 476, 112, 'B'),
+            tNode('vicious', 'text', '악순환', 207, 218),
+            tNode('limiting', 'text', '제한 프로세스', 489, 217),
+            tNode('reason', 'text', '성과의 제한 또는 제약', 711, 188),
+            tNode('delay', 'text', '지연', 443, 45),
           ],
-          // 안쪽 화살표는 짧게 박스로 들어가고, 바깥쪽 화살표는 크게 위로
-          // 돌아나가 R1·B2 양쪽이 위에서 만나는 책 그림의 모양을 재현한다.
+          // R1(강화 루프)은 안쪽의 짧은 두 화살표로, B2(균형 루프)는 그 오른쪽에서 지연을
+          // 두고 성과를 제약하는 두 화살표로, 그리고 제약하는 행동에서 증가하는 행동까지
+          // 크게 바깥으로 돌아나가는 화살표로 전체 구조가 하나로 이어짐을 보여준다.
           edges: [
-            tEdge('action', 'perf', { bend: 15 }),
-            tEdge('perf', 'action', { bend: 170 }),
-            tEdge('constraint', 'perf', { bend: -15 }),
-            tEdge('perf', 'constraint', { bend: -170, delay: true, polarity: '-' }),
+            tEdge('action', 'perf', { bend: -86 }),
+            tEdge('perf', 'action', { bend: -111 }),
+            tEdge('perf', 'constraint', { bend: 114 }),
+            tEdge('constraint', 'perf', { bend: 84, delay: true }),
+            tEdge('constraint', 'action', { bend: 241 }),
+            tEdge('reason', 'constraint', { bend: 0 }),
           ],
         };
       },
