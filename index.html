@@ -16,8 +16,8 @@
     <input id="mapTitle" class="title-input" value="새 시스템 지도" spellcheck="false" aria-label="지도 제목">
     <div class="spacer"></div>
     <div class="topbar-actions">
-      <button id="btnNew" class="btn" title="새 지도 (기존 내용은 지워집니다)">새로 만들기</button>
-      <button id="btnImport" class="btn" title="JSON 파일 불러오기">불러오기</button>
+      <button id="btnNew" class="btn" title="새 탭에 빈 지도 열기">새 탭</button>
+      <button id="btnImport" class="btn" title="JSON 파일을 새 탭으로 불러오기">불러오기</button>
       <input type="file" id="fileInput" accept="application/json,.json" hidden>
       <!-- 시스템 원형 메뉴: 그래프 모양을 다시 다듬는 동안 임시로 숨김.
            JS 쪽 코드(ARCHETYPE_TEMPLATES, insertTemplate 등)는 그대로 있으니
@@ -37,6 +37,8 @@
       <button id="themeToggle" class="btn icon-btn" title="테마 전환">🌙</button>
     </div>
   </header>
+
+  <div id="tabbar" aria-label="지도 탭 목록"></div>
 
   <div id="body">
 

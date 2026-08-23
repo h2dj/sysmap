@@ -64,6 +64,10 @@
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
+  // 탭마다 지도 하나(state) + 화면(view) + 실행취소 이력(history)을 따로 가진다.
+  // 현재 활성 탭의 값은 아래 state/view/history/historyIndex 변수에 "풀어서" 담아두고,
+  // 다른 탭으로 전환하기 직전에만 flushActiveTab()으로 tabs[] 배열에 도로 저장한다 —
+  // 매번 tabs 배열을 통해 간접 참조하지 않아도 기존의 모든 편집 로직이 그대로 동작한다.
   let state = { title: '새 시스템 지도', nodes: [], edges: [] };
   const view = { x: 0, y: 0, scale: 1 };
   let tool = 'select';
@@ -77,7 +81,12 @@
   let historyIndex = -1;
   let autosaveTimer = null;
 
-  const STORAGE_KEY = 'sysmap.autosave.v1';
+  // ---- 탭 -----------------------------------------------------------------------------------
+  let tabs = [];
+  let activeTabId = null;
+
+  const STORAGE_KEY = 'sysmap.tabs.v1';
+  const LEGACY_STORAGE_KEY = 'sysmap.autosave.v1';
   const THEME_KEY = 'sysmap.theme';
 
   // ---------------------------------------------------------------------
@@ -94,6 +103,7 @@
   const hintEl = document.getElementById('hint');
   const countsEl = document.getElementById('counts');
   const mapTitleInput = document.getElementById('mapTitle');
+  const tabBarEl = document.getElementById('tabbar');
   const propsPanel = document.getElementById('propsPanel');
   const panelBody = document.getElementById('panelBody');
   const panelTitle = document.getElementById('panelTitle');
@@ -236,19 +246,54 @@
     clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        flushActiveTab();
+        const payload = {
+          activeId: activeTabId,
+          tabs: tabs.map(t => ({ id: t.id, state: t.state, view: t.view })),
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       } catch (e) { /* storage full or unavailable — ignore */ }
     }, 300);
   }
-  function loadAutosave() {
+  // 새 탭 형식(sysmap.tabs.v1)을 우선 읽고, 없으면 이전 버전(단일 지도) 자동저장을
+  // 탭 하나로 옮겨온 뒤 지운다 — 탭 기능 도입 전 사용자도 기존 지도를 잃지 않는다.
+  function loadTabs() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return false;
-      const data = JSON.parse(raw);
-      if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) return false;
-      state = { title: data.title || '새 시스템 지도', nodes: data.nodes, edges: data.edges };
-      return true;
-    } catch (e) { return false; }
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data && Array.isArray(data.tabs) && data.tabs.length > 0) {
+          tabs = data.tabs.map(t => {
+            const st = (t && t.state && Array.isArray(t.state.nodes) && Array.isArray(t.state.edges))
+              ? { title: t.state.title || '새 시스템 지도', nodes: t.state.nodes, edges: t.state.edges }
+              : { title: '새 시스템 지도', nodes: [], edges: [] };
+            const view = (t && t.view && typeof t.view.scale === 'number')
+              ? { x: t.view.x || 0, y: t.view.y || 0, scale: t.view.scale }
+              : { x: 0, y: 0, scale: 1 };
+            const snap = JSON.stringify(st);
+            return { id: (t && t.id) || uid(), state: st, view, history: [snap], historyIndex: 0 };
+          });
+          activeTabId = tabs.some(t => t.id === data.activeId) ? data.activeId : tabs[0].id;
+          return true;
+        }
+      }
+      const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (legacyRaw) {
+        const data = JSON.parse(legacyRaw);
+        if (data && Array.isArray(data.nodes) && Array.isArray(data.edges)) {
+          const st = { title: data.title || '새 시스템 지도', nodes: data.nodes, edges: data.edges };
+          const t = createTab(st);
+          tabs = [t];
+          activeTabId = t.id;
+          // 새 형식으로 먼저 저장한 뒤에 옛 키를 지운다 — 편집 없이 바로 새로고침/종료해도
+          // 마이그레이션 과정에서 데이터가 통째로 사라지는 순간이 생기지 않게 한다.
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeId: t.id, tabs: [{ id: t.id, state: t.state, view: t.view }] }));
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+          return true;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return false;
   }
 
   function starterTemplate() {
@@ -266,6 +311,132 @@
         { id: uid(), from: n2.id, to: n3.id, label: '쿼리', dashed: false, arrowStart: false, arrowEnd: true },
       ],
     };
+  }
+
+  // ===========================================================================================
+  // 탭 — 한 창에서 여러 지도를 열어두고 전환
+  // ===========================================================================================
+  // 활성 탭의 값은 state/view/history/historyIndex 변수에 "풀어서" 담아 쓰다가, 다른
+  // 탭으로 넘어가거나 저장하기 직전에만 tabs[] 배열의 해당 항목에 도로 채워 넣는다.
+  function flushActiveTab() {
+    const t = tabs.find(x => x.id === activeTabId);
+    if (!t) return;
+    t.state = state;
+    t.view = { x: view.x, y: view.y, scale: view.scale };
+    t.history = history;
+    t.historyIndex = historyIndex;
+  }
+
+  function createTab(initialState) {
+    const st = initialState || { title: '새 시스템 지도', nodes: [], edges: [] };
+    const snap = JSON.stringify(st);
+    return { id: uid(), state: st, view: { x: 0, y: 0, scale: 1 }, history: [snap], historyIndex: 0 };
+  }
+
+  // tabs[] 배열에서 이미 만들어진 탭 하나를 활성 탭으로 불러온다 (전환·부팅 공용).
+  function activateTab(id, opts) {
+    const t = tabs.find(x => x.id === id);
+    if (!t) return;
+    activeTabId = id;
+    state = t.state;
+    view.x = t.view.x; view.y = t.view.y; view.scale = t.view.scale;
+    history = t.history;
+    historyIndex = t.historyIndex;
+    mapTitleInput.value = state.title;
+    clearSelection();
+    render();
+    if (opts && opts.fit) zoomToFit(); else applyViewTransform();
+    renderTabBar();
+  }
+
+  function switchToTab(id) {
+    if (id === activeTabId) return;
+    flushActiveTab();
+    activateTab(id);
+    scheduleAutosave();
+  }
+
+  function addNewTabAndSwitch() {
+    flushActiveTab();
+    const t = createTab();
+    tabs.push(t);
+    activateTab(t.id, { fit: true });
+    scheduleAutosave();
+  }
+
+  // 탭을 새로 만들어 그 안에 지도를 담고 바로 전환한다 (JSON 불러오기 등에서 사용).
+  function openInNewTab(st) {
+    flushActiveTab();
+    const t = createTab(st);
+    tabs.push(t);
+    activateTab(t.id, { fit: true });
+    pushHistory();
+    scheduleAutosave();
+  }
+
+  function closeTab(id) {
+    const t = tabs.find(x => x.id === id);
+    if (!t) return;
+    const content = id === activeTabId ? state : t.state;
+    if (content.nodes.length > 0 || content.edges.length > 0) {
+      const name = content.title && content.title.trim() ? content.title.trim() : '제목 없음';
+      if (!confirm(`"${name}" 탭을 닫을까요? 저장된 내용이 사라집니다.`)) return;
+    }
+    const idx = tabs.findIndex(x => x.id === id);
+    const wasActive = id === activeTabId;
+    tabs.splice(idx, 1);
+    if (tabs.length === 0) tabs.push(createTab());
+    if (wasActive) {
+      const nextIdx = Math.min(idx, tabs.length - 1);
+      activateTab(tabs[nextIdx].id, { fit: true });
+    } else {
+      renderTabBar();
+    }
+    scheduleAutosave();
+  }
+
+  function renderTabBar() {
+    if (!tabBarEl) return;
+    tabBarEl.innerHTML = '';
+    for (const t of tabs) {
+      const isActive = t.id === activeTabId;
+      const title = isActive ? state.title : t.state.title;
+      const el = document.createElement('div');
+      el.className = 'tab' + (isActive ? ' active' : '');
+      el.dataset.id = t.id;
+      el.title = title && title.trim() ? title.trim() : '제목 없음';
+      const label = document.createElement('span');
+      label.className = 'tab-label';
+      label.textContent = title && title.trim() ? title.trim() : '제목 없음';
+      el.appendChild(label);
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'tab-close';
+      closeBtn.type = 'button';
+      closeBtn.title = '탭 닫기';
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
+      el.appendChild(closeBtn);
+      el.addEventListener('click', () => switchToTab(t.id));
+      tabBarEl.appendChild(el);
+    }
+    const addBtn = document.createElement('button');
+    addBtn.id = 'btnAddTab';
+    addBtn.className = 'tab-add';
+    addBtn.type = 'button';
+    addBtn.title = '새 탭';
+    addBtn.textContent = '+';
+    addBtn.addEventListener('click', addNewTabAndSwitch);
+    tabBarEl.appendChild(addBtn);
+  }
+
+  // 제목 입력창에 매 키입력마다 전체 탭바를 다시 그리는 대신, 활성 탭 라벨 텍스트만 갱신.
+  function updateActiveTabLabel() {
+    if (!tabBarEl) return;
+    const el = tabBarEl.querySelector('.tab.active .tab-label');
+    const parent = tabBarEl.querySelector('.tab.active');
+    const title = state.title && state.title.trim() ? state.title.trim() : '제목 없음';
+    if (el) el.textContent = title;
+    if (parent) parent.title = title;
   }
 
   // ===========================================================================================
@@ -1805,19 +1976,11 @@
     applyViewTransform();
   }
 
-  mapTitleInput.addEventListener('input', () => { state.title = mapTitleInput.value; });
+  mapTitleInput.addEventListener('input', () => { state.title = mapTitleInput.value; updateActiveTabLabel(); });
   mapTitleInput.addEventListener('change', () => pushHistory());
 
-  document.getElementById('btnNew').addEventListener('click', () => {
-    if (state.nodes.length === 0 && state.edges.length === 0) return;
-    if (!confirm('현재 지도를 지우고 새로 시작할까요? 저장하지 않은 변경은 사라집니다.')) return;
-    state = { title: '새 시스템 지도', nodes: [], edges: [] };
-    mapTitleInput.value = state.title;
-    clearSelection();
-    render();
-    zoomToFit();
-    pushHistory();
-  });
+  // "새로 만들기"는 현재 지도를 지우는 대신 새 탭을 열어 기존 지도를 그대로 남겨둔다.
+  document.getElementById('btnNew').addEventListener('click', addNewTabAndSwitch);
 
   // 시스템 원형(archetype) 템플릿 드롭다운
   const archetypeMenu = document.getElementById('archetypeMenu');
@@ -1880,12 +2043,8 @@
       try {
         const data = JSON.parse(reader.result);
         if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error('invalid');
-        state = { title: data.title || '가져온 지도', nodes: data.nodes, edges: data.edges };
-        mapTitleInput.value = state.title;
-        clearSelection();
-        render();
-        zoomToFit();
-        pushHistory();
+        // 현재 탭을 덮어쓰지 않고 새 탭에 불러와서, 작업 중이던 지도를 잃지 않게 한다.
+        openInNewTab({ title: data.title || '가져온 지도', nodes: data.nodes, edges: data.edges });
       } catch (err) {
         alert('올바른 JSON 지도 파일이 아닙니다.');
       }
@@ -2108,14 +2267,13 @@
   // Boot
   // ===========================================================================================
   function boot() {
-    const hadAutosave = loadAutosave();
-    if (!hadAutosave) state = starterTemplate();
-    mapTitleInput.value = state.title;
-    render();
-    applyViewTransform();
-    zoomToFit();
-    history = [snapshot()];
-    historyIndex = 0;
+    const hadSaved = loadTabs();
+    if (!hadSaved) {
+      const t = createTab(starterTemplate());
+      tabs = [t];
+      activeTabId = t.id;
+    }
+    activateTab(activeTabId, { fit: true });
   }
   boot();
 
