@@ -488,19 +488,27 @@
       id: 'fixes-that-fail',
       name: '역효과를 낳는 해결책',
       subtitle: '임시방편이 지연을 두고 문제를 다시 악화시키는 구조',
-      implemented: false,
+      implemented: true,
       build() {
         return {
           nodes: [
-            tNode('problem', 'rect', '문제 현상', 0, 0),
-            tNode('fix', 'text', '단기적으로 효과가 있는 임시방편', 320, 0),
-            tNode('b1', 'loop', 'B1', 160, 0, 'B'),
-            tNode('r2', 'loop', 'R2', 160, -140, 'R'),
+            tNode('problem', 'rect', '문제 현상 또는 압력', 148, 182),
+            tNode('fix', 'text', '단기적으로 효과가 있는 임시방편', 533, 181),
+            tNode('b1', 'loop', 'B1', 344, 180, 'B'),
+            tNode('improve', 'text', '현상 개선 프로세스', 340, 74),
+            tNode('sideeffect', 'text', '문제를 악화시키는 의도치 않은 결과', 336, 362),
+            tNode('r2', 'loop', 'R2', 335, 316, 'R'),
+            tNode('delay', 'text', '지연', 543, 307),
+            tNode('vicious', 'text', '악순환', 338, 404),
           ],
+          // B1(균형 루프)은 위쪽에서 문제와 임시방편이 짧게 오가고, R2(강화 루프)는 임시방편에서
+          // 지연을 두고 의도치 않은 부작용으로 갔다가 문제를 다시 악화시키며 돌아와 두 루프가
+          // "문제 현상"·"임시방편" 노드를 공유하며 하나로 이어진다.
           edges: [
-            tEdge('problem', 'fix', { bend: 40 }),
-            tEdge('fix', 'problem', { bend: 40 }),
-            tEdge('fix', 'problem', { bend: 180, delay: true }),
+            tEdge('problem', 'fix', { bend: -117 }),
+            tEdge('fix', 'problem', { bend: -109 }),
+            tEdge('fix', 'sideeffect', { bend: -108, delay: true }),
+            tEdge('sideeffect', 'problem', { bend: -97 }),
           ],
         };
       },
