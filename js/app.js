@@ -800,6 +800,148 @@
   }
 
   // ===========================================================================================
+  // 문장으로 다이어그램 만들기 — 규칙 기반(정규식) 파서
+  // ===========================================================================================
+  // 지원하는 세 가지 형식:
+  //   1. "A가 증가하면 B도 증가/감소한다" — 인과 + 극성(+/-)
+  //   2. "A 때문에 B" / "A → B" — 단순 인과 (극성 없음)
+  //   3. 여러 문장을 줄바꿈으로 구분해 한 번에 입력 — 같은 이름은 같은 노드로 합쳐짐
+  // 자유 문장을 전부 이해하지는 못하고, 정해진 패턴에 맞는 문장만 인식한다 (실패한 문장은
+  // 건너뛰고 사용자에게 알려줌).
+  const INC_WORDS = ['증가', '상승', '늘어나', '늘어남', '늘면', '올라가', '커지', '많아지', '높아지'];
+  const DEC_WORDS = ['감소', '하락', '줄어들', '줄어듦', '줄면', '내려가', '작아지', '적어지', '낮아지'];
+  const DIR_WORDS = [...INC_WORDS, ...DEC_WORDS].sort((a, b) => b.length - a.length);
+  const DIR_ALT = DIR_WORDS.join('|');
+  // 인과 + 극성: "...증가하면...증가한다" 류. group1/3 = 원인/결과 구절(방향 단어 앞까지),
+  // group2/4 = 실제 매칭된 방향 단어(같은 계열이면 +, 다르면 -).
+  const POLARITY_RE = new RegExp(`^(.+?)(${DIR_ALT})\\S*\\s*(?:하면|할수록|하게\\s*되면|하니|해지면)\\s*(.+?)(${DIR_ALT})\\S*`);
+  // 단순 인과: 화살표 표기, "때문에/로 인해" 류, "유발한다/이어진다" 류.
+  // ("로 인해"는 앞말 받침에 따라 "으로 인해"가 되므로 별도 규칙으로 분리 — 그냥 하나로
+  // 합치면 "으"가 원인 구절 쪽에 잘못 남는다. "유발한다" 류도 목적격 조사(를/을)를
+  // 필수로 요구해야 사이에 낀 구절을 정확히 잘라낼 수 있다.)
+  const SIMPLE_PATTERNS = [
+    { re: /^(.+?)\s*(?:→|⇒|=>|->)\s*(.+)$/, causeIdx: 1, effectIdx: 2 },
+    { re: /^(.+?)\s*때문에\s*(.+)$/, causeIdx: 1, effectIdx: 2 },
+    { re: /^(.+?)(?:로\s*인해|으로\s*인해)\s*(.+)$/, causeIdx: 1, effectIdx: 2 },
+    { re: /^(.+?)\s*탓에\s*(.+)$/, causeIdx: 1, effectIdx: 2 },
+    { re: /^(.+?)\s*덕분에\s*(.+)$/, causeIdx: 1, effectIdx: 2 },
+    { re: /^(.+?)(?:는|은|가|이)\s*(.+?)(?:를|을)\s*(?:유발한다|일으킨다|초래한다)\.?$/, causeIdx: 1, effectIdx: 2 },
+    { re: /^(.+?)(?:는|은|가|이)\s*(.+?)(?:로|으로)\s*이어진다\.?$/, causeIdx: 1, effectIdx: 2 },
+  ];
+  // 캡처된 구절 끝에 남는 조사 한 글자와 공백·마침표를 정리해 노드 라벨로 쓸 수 있게 다듬는다.
+  function cleanupNodeText(s) {
+    return (s || '').trim().replace(/[은는이가을를도]$/, '').trim().replace(/[.!?]+$/, '').trim();
+  }
+  // "의료비 지출이 증가한다"처럼 구절 끝에 방향 단어+어미가 남아 있으면 주어부만 남긴다
+  // (단순 인과 패턴의 원인/결과 구절에 서술어가 딸려 오는 경우를 다듬는 용도).
+  function extractSubjectPhrase(s) {
+    const m = (s || '').match(new RegExp(`^(.+?)(${DIR_ALT})\\S*$`));
+    return cleanupNodeText(m ? m[1] : s);
+  }
+  function splitIntoSentences(text) {
+    return (text || '')
+      .split(/\r?\n/)
+      .flatMap(line => line.split(/(?<=[.!?。])\s+/))
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+  // 문장 하나를 { cause, effect, polarity } 로 파싱. 어떤 패턴에도 안 맞으면 null.
+  function parseSentence(sentence) {
+    const m = sentence.match(POLARITY_RE);
+    if (m) {
+      const cause = cleanupNodeText(m[1]);
+      const effect = cleanupNodeText(m[3]);
+      const sameDir = (INC_WORDS.includes(m[2]) && INC_WORDS.includes(m[4])) ||
+        (DEC_WORDS.includes(m[2]) && DEC_WORDS.includes(m[4]));
+      if (cause && effect) return { cause, effect, polarity: sameDir ? '+' : '-' };
+    }
+    for (const p of SIMPLE_PATTERNS) {
+      const sm = sentence.match(p.re);
+      if (sm) {
+        const cause = extractSubjectPhrase(sm[p.causeIdx]);
+        const effect = extractSubjectPhrase(sm[p.effectIdx]);
+        if (cause && effect) return { cause, effect, polarity: '' };
+      }
+    }
+    return null;
+  }
+  function buildDiagramFromSentences(rawText) {
+    const sentences = splitIntoSentences(rawText);
+    const parsedEdges = [];
+    const failed = [];
+    for (const s of sentences) {
+      const parsed = parseSentence(s);
+      if (parsed) parsedEdges.push(parsed); else failed.push(s);
+    }
+    return { parsedEdges, failed, totalCount: sentences.length };
+  }
+  // 파싱된 원인→결과 목록을 노드/연결선 그래프로 합치고(같은 이름 노드는 병합),
+  // 원인이 없는 노드를 왼쪽 첫 열에 두는 간단한 레이어 배치(BFS)로 좌표를 계산한다.
+  // 서로 되돌아오는 문장(순환 구조)이 섞여 있어도 이미 배치된 노드는 다시 갱신하지
+  // 않아 무한 루프에 빠지지 않는다.
+  function layoutParsedGraph(parsedEdges) {
+    const refByLabel = new Map();
+    const nodesList = [];
+    const edgesList = [];
+    function ensureRef(label) {
+      if (refByLabel.has(label)) return refByLabel.get(label);
+      const ref = 'n' + nodesList.length;
+      refByLabel.set(label, ref);
+      nodesList.push({ ref, label });
+      return ref;
+    }
+    for (const e of parsedEdges) {
+      const fromRef = ensureRef(e.cause);
+      const toRef = ensureRef(e.effect);
+      if (!edgesList.some(x => x.fromRef === fromRef && x.toRef === toRef)) {
+        edgesList.push({ fromRef, toRef, polarity: e.polarity });
+      }
+    }
+
+    const outgoing = new Map();
+    const incomingCount = new Map();
+    for (const n of nodesList) { outgoing.set(n.ref, []); incomingCount.set(n.ref, 0); }
+    for (const e of edgesList) {
+      outgoing.get(e.fromRef).push(e.toRef);
+      incomingCount.set(e.toRef, (incomingCount.get(e.toRef) || 0) + 1);
+    }
+    const rank = new Map();
+    const queue = [];
+    for (const n of nodesList) if (incomingCount.get(n.ref) === 0) { rank.set(n.ref, 0); queue.push(n.ref); }
+    if (queue.length === 0 && nodesList.length > 0) { rank.set(nodesList[0].ref, 0); queue.push(nodesList[0].ref); }
+    let qi = 0;
+    while (qi < queue.length) {
+      const cur = queue[qi++];
+      for (const nxt of outgoing.get(cur) || []) {
+        if (rank.has(nxt)) continue; // 이미 배치됨(순환 구조 포함) — 다시 갱신하지 않음
+        rank.set(nxt, rank.get(cur) + 1);
+        queue.push(nxt);
+      }
+    }
+    let maxRank = 0;
+    for (const r of rank.values()) maxRank = Math.max(maxRank, r);
+    for (const n of nodesList) if (!rank.has(n.ref)) rank.set(n.ref, ++maxRank);
+
+    const byRank = new Map();
+    for (const n of nodesList) {
+      const r = rank.get(n.ref);
+      if (!byRank.has(r)) byRank.set(r, []);
+      byRank.get(r).push(n);
+    }
+    const colGap = 240, rowGap = 130;
+    const tNodes = [];
+    for (const [r, group] of byRank) {
+      group.forEach((n, i) => tNodes.push(tNode(n.ref, 'text', n.label, r * colGap, i * rowGap)));
+    }
+    // 서로 되돌아오는 A→B, B→A 쌍은 겹치지 않도록 강화 루프 원형과 같은 방식으로 곡률을 준다.
+    const tEdges = edgesList.map(e => {
+      const hasReverse = edgesList.some(o => o.fromRef === e.toRef && o.toRef === e.fromRef);
+      return tEdge(e.fromRef, e.toRef, { polarity: e.polarity, bend: hasReverse ? 45 : 0 });
+    });
+    return { nodes: tNodes, edges: tEdges };
+  }
+
+  // ===========================================================================================
   // CRUD
   // ===========================================================================================
   function addNode(shape, worldX, worldY) {
@@ -2476,6 +2618,43 @@
   window.addEventListener('resize', () => {
     if (!archetypeMenu.hidden) positionDropdownMenu(archetypeMenu, document.getElementById('btnArchetype'));
     if (!exportMenu.hidden) positionDropdownMenu(exportMenu, document.getElementById('btnExport'));
+  });
+
+  // 문장으로 다이어그램 만들기 (모달)
+  const textDiagramModal = document.getElementById('textDiagramModal');
+  const textDiagramInput = document.getElementById('textDiagramInput');
+  const textDiagramResult = document.getElementById('textDiagramResult');
+  function openTextDiagramModal() {
+    textDiagramModal.hidden = false;
+    textDiagramResult.hidden = true;
+    textDiagramInput.value = '';
+    textDiagramInput.focus();
+  }
+  function closeTextDiagramModal() { textDiagramModal.hidden = true; }
+  document.getElementById('btnTextToDiagram').addEventListener('click', openTextDiagramModal);
+  document.getElementById('textDiagramClose').addEventListener('click', closeTextDiagramModal);
+  document.getElementById('textDiagramCancel').addEventListener('click', closeTextDiagramModal);
+  // 배경(오버레이) 클릭 시 닫힘 — 모달 박스 자체를 클릭한 경우는 버블링을 막아 제외.
+  textDiagramModal.addEventListener('click', (e) => { if (e.target === textDiagramModal) closeTextDiagramModal(); });
+  textDiagramInput.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); document.getElementById('textDiagramSubmit').click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeTextDiagramModal(); }
+  });
+  document.getElementById('textDiagramSubmit').addEventListener('click', () => {
+    const { parsedEdges, failed, totalCount } = buildDiagramFromSentences(textDiagramInput.value);
+    if (parsedEdges.length === 0) {
+      textDiagramResult.hidden = false;
+      textDiagramResult.textContent = totalCount === 0
+        ? '문장을 입력해주세요.'
+        : '인식한 문장이 없습니다. "A가 증가하면 B도 증가한다", "A 때문에 B", "A → B" 같은 형식으로 써보세요.';
+      return;
+    }
+    const def = layoutParsedGraph(parsedEdges);
+    insertTemplate({ build: () => def });
+    closeTextDiagramModal();
+    if (failed.length > 0) {
+      alert(`${parsedEdges.length}개 문장을 인식해 다이어그램을 만들었습니다.\n다음 ${failed.length}개 문장은 인식하지 못해 건너뛰었습니다:\n- ${failed.join('\n- ')}`);
+    }
   });
 
   document.getElementById('btnExportJson').addEventListener('click', () => {

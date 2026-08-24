@@ -597,6 +597,69 @@ body {
 }
 .align-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
 
+/* ===== 문장으로 다이어그램 만들기 (모달) ===== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 18, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+/* display:flex 위 규칙이 같은 우선순위인 브라우저 기본 [hidden]{display:none}보다
+   나중에 와서 이겨버리므로, hidden 속성이 있을 때는 명시적으로 다시 숨긴다. */
+.modal-overlay[hidden] { display: none; }
+.modal-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  width: min(560px, 100%);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h3 { margin: 0; font-size: 14px; }
+.modal-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+.modal-hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0; }
+.modal-hint b { color: var(--text); }
+.modal-error { color: var(--danger); }
+#textDiagramInput {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+#textDiagramInput:focus { outline: none; border-color: var(--accent); }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
 /* ===== Status bar ===== */
 #statusbar {
   flex: 0 0 auto;
@@ -654,4 +717,7 @@ body {
     text-overflow: ellipsis;
   }
   #counts { flex: 0 0 auto; white-space: nowrap; }
+
+  .modal-overlay { padding: 10px; }
+  .modal-box { max-height: 90vh; }
 }

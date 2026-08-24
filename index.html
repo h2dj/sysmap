@@ -23,6 +23,7 @@
         <button id="btnArchetype" class="btn" title="자주 쓰는 시스템 원형(인과 지도 패턴)을 한 번에 삽입">시스템 원형 ▾</button>
         <div id="archetypeMenu" class="dropdown-menu archetype-menu" hidden></div>
       </div>
+      <button id="btnTextToDiagram" class="btn" title="인과 관계 문장을 입력해 자동으로 다이어그램 생성">문장으로 그리기</button>
       <div class="dropdown">
         <button id="btnExport" class="btn btn-primary" title="내보내기">내보내기 ▾</button>
         <div id="exportMenu" class="dropdown-menu" hidden>
@@ -135,6 +136,26 @@
     <span id="hint">요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.</span>
     <span id="counts"></span>
   </footer>
+
+  <div id="textDiagramModal" class="modal-overlay" hidden>
+    <div class="modal-box" role="dialog" aria-labelledby="textDiagramTitle">
+      <div class="modal-header">
+        <h3 id="textDiagramTitle">문장으로 다이어그램 만들기</h3>
+        <button id="textDiagramClose" class="icon-btn" title="닫기">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">한 줄에 인과 관계 문장을 하나씩 입력하세요. 같은 이름이 여러 번 나오면 하나의 노드로 합쳐집니다.
+          지원 형식: <b>"A가 증가하면 B도 증가/감소한다"</b>, <b>"A 때문에 B"</b>, <b>"A → B"</b></p>
+        <textarea id="textDiagramInput" rows="8" spellcheck="false"
+          placeholder="예)&#10;출산율이 감소하면 생산가능인구가 감소한다&#10;생산가능인구가 감소하면 경제성장률도 감소한다&#10;고령화 때문에 의료비 지출이 증가한다&#10;가격 → 수요"></textarea>
+        <p id="textDiagramResult" class="modal-hint modal-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button id="textDiagramCancel" class="btn">취소</button>
+        <button id="textDiagramSubmit" class="btn btn-primary">다이어그램 만들기</button>
+      </div>
+    </div>
+  </div>
 
 </div>
 
