@@ -852,13 +852,24 @@
     // 연쇄 화살표: "A → B → C → D"처럼 화살표가 2개 이상이면 각 구간을 순서대로
     // 이어진 원인→결과 쌍(A→B, B→C, C→D)으로 쪼갠다 — 화살표 1개짜리는 기존처럼
     // 아래 SIMPLE_PATTERNS의 단일 인과 규칙을 그대로 탄다.
+    // 마지막 구간이 "(처음)"/"(처음으로)"(괄호 없이 써도 인식) 이거나 맨 처음 노드와
+    // 같은 텍스트면 순환 고리로 인식 — 새 노드를 만들지 않고 첫 노드로 되돌아가게
+    // 연결하며, 반환하는 배열에 고리를 이루는 노드 이름 순서를 ring으로 함께 담아
+    // layoutParsedGraph()가 원형으로 배치할 수 있게 한다.
     const arrowParts = sentence.split(/\s*(?:→|⇒|=>|->)\s*/);
     if (arrowParts.length >= 3) {
-      const nodes = arrowParts.map((p, i) =>
-        i === arrowParts.length - 1 ? extractSubjectPhrase(p) : cleanupNodeText(p));
+      const rawParts = arrowParts.map(p => p.trim());
+      const lastRaw = rawParts[rawParts.length - 1];
+      const isLoopMarker = /^[(（]?\s*처음\s*(?:으로)?\s*[)）]?$/.test(lastRaw);
+      const nodes = rawParts.map((p, i) =>
+        i === rawParts.length - 1 ? extractSubjectPhrase(p) : cleanupNodeText(p));
+      const firstNode = nodes[0];
+      const closesLoop = !!firstNode && (isLoopMarker || nodes[nodes.length - 1] === firstNode);
+      if (closesLoop) nodes[nodes.length - 1] = firstNode;
       if (nodes.every(Boolean)) {
         const edges = [];
         for (let i = 0; i < nodes.length - 1; i++) edges.push({ cause: nodes[i], effect: nodes[i + 1], polarity: '' });
+        if (closesLoop) edges.ring = nodes.slice(0, -1);
         return edges;
       }
     }
@@ -883,20 +894,25 @@
   function buildDiagramFromSentences(rawText) {
     const sentences = splitIntoSentences(rawText);
     const parsedEdges = [];
+    const rings = []; // 각 원소: 순환 고리를 이루는 노드 이름 배열(등장 순서, 마지막 중복 제외)
     const failed = [];
     for (const s of sentences) {
       const parsed = parseSentence(s);
-      if (Array.isArray(parsed)) parsedEdges.push(...parsed);
-      else if (parsed) parsedEdges.push(parsed);
+      if (Array.isArray(parsed)) {
+        parsedEdges.push(...parsed);
+        if (parsed.ring) rings.push(parsed.ring);
+      } else if (parsed) parsedEdges.push(parsed);
       else failed.push(s);
     }
-    return { parsedEdges, failed, totalCount: sentences.length };
+    return { parsedEdges, rings, failed, totalCount: sentences.length };
   }
   // 파싱된 원인→결과 목록을 노드/연결선 그래프로 합치고(같은 이름 노드는 병합),
   // 원인이 없는 노드를 왼쪽 첫 열에 두는 간단한 레이어 배치(BFS)로 좌표를 계산한다.
   // 서로 되돌아오는 문장(순환 구조)이 섞여 있어도 이미 배치된 노드는 다시 갱신하지
-  // 않아 무한 루프에 빠지지 않는다.
-  function layoutParsedGraph(parsedEdges) {
+  // 않아 무한 루프에 빠지지 않는다. rings(맨 처음 노드로 돌아오는 순환 고리 — 노드
+  // 이름 배열의 배열)가 있으면 3개 이상인 고리는 "고리 만들기" 기능과 같은 방식으로
+  // 원형 배치하고, 고리를 잇는 변은 원 중심 바깥쪽으로 휘게 한다.
+  function layoutParsedGraph(parsedEdges, rings) {
     const refByLabel = new Map();
     const nodesList = [];
     const edgesList = [];
@@ -915,43 +931,101 @@
       }
     }
 
+    // 고리 노드 이름을 실제 ref로 바꾼다. 3개 이상이고 이름이 서로 겹치지 않는 고리만
+    // 원형 배치 대상으로 삼는다 (2개짜리는 A→B/B→A 두 변으로 이미 아래 hasReverse
+    // 로직이 자연스럽게 처리해준다).
+    const ringRefSets = (rings || [])
+      .map(labels => labels.map(l => refByLabel.get(l)).filter(Boolean))
+      .filter(refs => refs.length >= 3 && new Set(refs).size === refs.length);
+    const refToRing = new Map(); // ref -> 자신이 속한 ringRefSets의 배열(참조 비교로 같은 고리인지 판별)
+    ringRefSets.forEach(refs => refs.forEach(ref => refToRing.set(ref, refs)));
+    function repOf(ref) { const ring = refToRing.get(ref); return ring ? ring[0] : ref; }
+
+    // ---- BFS 레이어(rank) 계산: 고리는 대표 노드(첫 멤버) 하나로 뭉쳐서 계산 ----
+    const repSet = new Set(nodesList.map(n => repOf(n.ref)));
     const outgoing = new Map();
     const incomingCount = new Map();
-    for (const n of nodesList) { outgoing.set(n.ref, []); incomingCount.set(n.ref, 0); }
+    for (const rep of repSet) { outgoing.set(rep, []); incomingCount.set(rep, 0); }
     for (const e of edgesList) {
-      outgoing.get(e.fromRef).push(e.toRef);
-      incomingCount.set(e.toRef, (incomingCount.get(e.toRef) || 0) + 1);
+      const a = repOf(e.fromRef), b = repOf(e.toRef);
+      if (a === b) continue; // 같은 고리 내부 변은 rank 계산에서 제외
+      outgoing.get(a).push(b);
+      incomingCount.set(b, (incomingCount.get(b) || 0) + 1);
     }
     const rank = new Map();
     const queue = [];
-    for (const n of nodesList) if (incomingCount.get(n.ref) === 0) { rank.set(n.ref, 0); queue.push(n.ref); }
-    if (queue.length === 0 && nodesList.length > 0) { rank.set(nodesList[0].ref, 0); queue.push(nodesList[0].ref); }
+    for (const rep of repSet) if (incomingCount.get(rep) === 0) { rank.set(rep, 0); queue.push(rep); }
+    if (queue.length === 0 && repSet.size > 0) { const first = [...repSet][0]; rank.set(first, 0); queue.push(first); }
     let qi = 0;
     while (qi < queue.length) {
       const cur = queue[qi++];
       for (const nxt of outgoing.get(cur) || []) {
-        if (rank.has(nxt)) continue; // 이미 배치됨(순환 구조 포함) — 다시 갱신하지 않음
+        if (rank.has(nxt)) continue; // 이미 배치됨(대표 노드 간 순환 구조 포함) — 다시 갱신하지 않음
         rank.set(nxt, rank.get(cur) + 1);
         queue.push(nxt);
       }
     }
     let maxRank = 0;
     for (const r of rank.values()) maxRank = Math.max(maxRank, r);
-    for (const n of nodesList) if (!rank.has(n.ref)) rank.set(n.ref, ++maxRank);
+    for (const rep of repSet) if (!rank.has(rep)) rank.set(rep, ++maxRank);
 
     const byRank = new Map();
-    for (const n of nodesList) {
-      const r = rank.get(n.ref);
+    for (const rep of repSet) {
+      const r = rank.get(rep);
       if (!byRank.has(r)) byRank.set(r, []);
-      byRank.get(r).push(n);
+      byRank.get(r).push(rep);
     }
+
     const colGap = 240, rowGap = 130;
     const tNodes = [];
-    for (const [r, group] of byRank) {
-      group.forEach((n, i) => tNodes.push(tNode(n.ref, 'text', n.label, r * colGap, i * rowGap)));
+    const tNodeByRef = new Map();
+    const ringCenterInfo = new Map(); // refs(배열, 참조로 구분) -> { cx, cy, radius }
+    function addTNode(ref, label, cx, cy) {
+      const n = tNode(ref, 'text', label, cx, cy);
+      tNodes.push(n);
+      tNodeByRef.set(ref, n);
+      return n;
     }
-    // 서로 되돌아오는 A→B, B→A 쌍은 겹치지 않도록 강화 루프 원형과 같은 방식으로 곡률을 준다.
+    function placeRing(refs, centerX, centerY) {
+      const count = refs.length;
+      const avgLen = refs.reduce((s, ref) => s + refByLabelRef(ref).length, 0) / count;
+      const approxSpan = clamp(avgLen * 9 + 40, 70, 220);
+      const gap = 70;
+      const radius = Math.max(150, (count * (approxSpan + gap)) / (2 * Math.PI));
+      const startAngle = -Math.PI / 2; // 12시 방향부터 시계 방향으로 배치 (고리 만들기 기능과 동일)
+      ringCenterInfo.set(refs, { cx: centerX, cy: centerY, radius });
+      refs.forEach((ref, i) => {
+        const angle = startAngle + (i * 2 * Math.PI) / count;
+        addTNode(ref, refByLabelRef(ref), centerX + radius * Math.cos(angle), centerY + radius * Math.sin(angle));
+      });
+    }
+    function refByLabelRef(ref) { return nodesList.find(n => n.ref === ref).label; }
+    for (const [r, reps] of byRank) {
+      reps.forEach((rep, i) => {
+        const cx = r * colGap, cy = i * rowGap;
+        const ring = refToRing.get(rep);
+        if (ring) placeRing(ring, cx, cy);
+        else addTNode(rep, refByLabelRef(rep), cx, cy);
+      });
+    }
+
+    // 서로 되돌아오는 A→B, B→A 쌍은 겹치지 않도록 강화 루프 원형과 같은 방식으로 곡률을
+    // 주고, 순환 고리 내부를 잇는 변은 원 중심 바깥쪽으로 휘게 한다("고리 만들기"의
+    // bendOutward와 동일한 계산: 변의 중점이 원 중심에서 먼 쪽으로 곡률 부호를 정함).
     const tEdges = edgesList.map(e => {
+      const ringA = refToRing.get(e.fromRef), ringB = refToRing.get(e.toRef);
+      if (ringA && ringA === ringB) {
+        const info = ringCenterInfo.get(ringA);
+        const fromT = tNodeByRef.get(e.fromRef), toT = tNodeByRef.get(e.toRef);
+        const midx = (fromT.cx + toT.cx) / 2, midy = (fromT.cy + toT.cy) / 2;
+        const dx = toT.cx - fromT.cx, dy = toT.cy - fromT.cy;
+        const len = Math.hypot(dx, dy) || 1;
+        const px = -dy / len, py = dx / len;
+        const outX = midx - info.cx, outY = midy - info.cy;
+        const sign = (outX * px + outY * py) >= 0 ? 1 : -1;
+        const bendMag = clamp(info.radius * 0.35, 26, 110);
+        return tEdge(e.fromRef, e.toRef, { polarity: e.polarity, bend: sign * bendMag });
+      }
       const hasReverse = edgesList.some(o => o.fromRef === e.toRef && o.toRef === e.fromRef);
       return tEdge(e.fromRef, e.toRef, { polarity: e.polarity, bend: hasReverse ? 45 : 0 });
     });
@@ -2658,7 +2732,7 @@
     else if (e.key === 'Escape') { e.preventDefault(); closeTextDiagramModal(); }
   });
   document.getElementById('textDiagramSubmit').addEventListener('click', () => {
-    const { parsedEdges, failed, totalCount } = buildDiagramFromSentences(textDiagramInput.value);
+    const { parsedEdges, rings, failed, totalCount } = buildDiagramFromSentences(textDiagramInput.value);
     if (parsedEdges.length === 0) {
       textDiagramResult.hidden = false;
       textDiagramResult.textContent = totalCount === 0
@@ -2666,7 +2740,7 @@
         : '인식한 문장이 없습니다. "A가 증가하면 B도 증가한다", "A 때문에 B", "A → B → C" 같은 형식으로 써보세요.';
       return;
     }
-    const def = layoutParsedGraph(parsedEdges);
+    const def = layoutParsedGraph(parsedEdges, rings);
     insertTemplate({ build: () => def });
     closeTextDiagramModal();
     if (failed.length > 0) {
