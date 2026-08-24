@@ -802,10 +802,11 @@
   // ===========================================================================================
   // 문장으로 다이어그램 만들기 — 규칙 기반(정규식) 파서
   // ===========================================================================================
-  // 지원하는 세 가지 형식:
+  // 지원하는 네 가지 형식:
   //   1. "A가 증가하면 B도 증가/감소한다" — 인과 + 극성(+/-)
   //   2. "A 때문에 B" / "A → B" — 단순 인과 (극성 없음)
-  //   3. 여러 문장을 줄바꿈으로 구분해 한 번에 입력 — 같은 이름은 같은 노드로 합쳐짐
+  //   3. "A → B → C → D" — 연쇄 화살표 한 줄로 여러 노드를 순서대로 연결
+  //   4. 여러 문장을 줄바꿈으로 구분해 한 번에 입력 — 같은 이름은 같은 노드로 합쳐짐
   // 자유 문장을 전부 이해하지는 못하고, 정해진 패턴에 맞는 문장만 인식한다 (실패한 문장은
   // 건너뛰고 사용자에게 알려줌).
   const INC_WORDS = ['증가', '상승', '늘어나', '늘어남', '늘면', '올라가', '커지', '많아지', '높아지'];
@@ -845,8 +846,22 @@
       .map(s => s.trim())
       .filter(Boolean);
   }
-  // 문장 하나를 { cause, effect, polarity } 로 파싱. 어떤 패턴에도 안 맞으면 null.
+  // 문장 하나를 { cause, effect, polarity } 로 파싱(연쇄 화살표는 배열로). 어떤
+  // 패턴에도 안 맞으면 null.
   function parseSentence(sentence) {
+    // 연쇄 화살표: "A → B → C → D"처럼 화살표가 2개 이상이면 각 구간을 순서대로
+    // 이어진 원인→결과 쌍(A→B, B→C, C→D)으로 쪼갠다 — 화살표 1개짜리는 기존처럼
+    // 아래 SIMPLE_PATTERNS의 단일 인과 규칙을 그대로 탄다.
+    const arrowParts = sentence.split(/\s*(?:→|⇒|=>|->)\s*/);
+    if (arrowParts.length >= 3) {
+      const nodes = arrowParts.map((p, i) =>
+        i === arrowParts.length - 1 ? extractSubjectPhrase(p) : cleanupNodeText(p));
+      if (nodes.every(Boolean)) {
+        const edges = [];
+        for (let i = 0; i < nodes.length - 1; i++) edges.push({ cause: nodes[i], effect: nodes[i + 1], polarity: '' });
+        return edges;
+      }
+    }
     const m = sentence.match(POLARITY_RE);
     if (m) {
       const cause = cleanupNodeText(m[1]);
@@ -871,7 +886,9 @@
     const failed = [];
     for (const s of sentences) {
       const parsed = parseSentence(s);
-      if (parsed) parsedEdges.push(parsed); else failed.push(s);
+      if (Array.isArray(parsed)) parsedEdges.push(...parsed);
+      else if (parsed) parsedEdges.push(parsed);
+      else failed.push(s);
     }
     return { parsedEdges, failed, totalCount: sentences.length };
   }
@@ -2646,7 +2663,7 @@
       textDiagramResult.hidden = false;
       textDiagramResult.textContent = totalCount === 0
         ? '문장을 입력해주세요.'
-        : '인식한 문장이 없습니다. "A가 증가하면 B도 증가한다", "A 때문에 B", "A → B" 같은 형식으로 써보세요.';
+        : '인식한 문장이 없습니다. "A가 증가하면 B도 증가한다", "A 때문에 B", "A → B → C" 같은 형식으로 써보세요.';
       return;
     }
     const def = layoutParsedGraph(parsedEdges);
