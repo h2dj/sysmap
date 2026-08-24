@@ -39,9 +39,10 @@
   // 텍스트·루프 노드는 배경 도형이 없어 글자 크기에 딱 맞게 자동으로 커진다.
   const measureCtx = document.createElement('canvas').getContext('2d');
   function loopDisplayText(label, loopType) { return `${LOOP_ICON[loopType] || LOOP_ICON.R} ${label || ''}`; }
-  function measureNodeSize(shape, label, loopType) {
+  function defaultNodeFontSize(shape) { return shape === 'loop' ? 15 : 13; }
+  function measureNodeSize(shape, label, loopType, fontSize) {
     const isLoop = shape === 'loop';
-    const fontSize = isLoop ? 15 : 13;
+    fontSize = fontSize || defaultNodeFontSize(shape);
     const fontWeight = isLoop ? 700 : 400;
     measureCtx.font = `${fontWeight} ${fontSize}px ${FONT_STACK}`;
     const display = isLoop ? loopDisplayText(label, loopType) : (label || '');
@@ -768,6 +769,7 @@
       id: uid(), from: idMap[e.from], to: idMap[e.to], label: e.label || '',
       dashed: !!e.dashed, arrowStart: !!e.arrowStart, arrowEnd: e.arrowEnd !== false,
       bend: e.bend || 0, delay: !!e.delay, polarity: e.polarity || '', bubble: !!e.bubble,
+      color: e.color || '',
     }));
 
     state.nodes.push(...newNodes);
@@ -789,7 +791,7 @@
     if (isTextLike) {
       if (shape === 'loop') node.loopType = 'R';
       node.textColor = cssVar('--text') || '#1c2128';
-      ({ w, h } = measureNodeSize(shape, label, node.loopType));
+      ({ w, h } = measureNodeSize(shape, label, node.loopType, node.fontSize));
       fill = 'transparent';
       stroke = node.textColor;
     } else {
@@ -811,7 +813,7 @@
     const edge = {
       id: uid(), from: fromId, to: toId, label: '',
       dashed: false, arrowStart: false, arrowEnd: true,
-      bend: 0, delay: false, polarity: '', bubble: false,
+      bend: 0, delay: false, polarity: '', bubble: false, color: '',
     };
     state.edges.push(edge);
     render();
@@ -1171,6 +1173,15 @@
     return el;
   }
 
+  // 프레젠테이션 속성(fill=, font-size=)은 스타일시트의 .node-label 규칙보다
+  // 우선순위가 낮아 덮어써진다 — 인라인 style로 지정해야 커스텀 글자색·글자크기가
+  // 실제로 적용된다. 도형 노드(사각형/원/마름모/말풍선)도 글자색·크기를 바꿀 수
+  // 있도록 모든 노드 타입에 공통으로 적용한다.
+  function applyNodeTextStyle(text, node) {
+    text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+    text.style.fontSize = (node.fontSize || defaultNodeFontSize(node.shape)) + 'px';
+  }
+
   function nodeDisplayText(node) {
     return node.shape === 'loop' ? loopDisplayText(node.label, node.loopType) : node.label;
   }
@@ -1184,9 +1195,7 @@
       x: node.w / 2, y: node.h / 2,
       class: 'node-label' + (node.shape === 'loop' ? ' loop-label' : ''),
     });
-    // 프레젠테이션 속성(fill=)은 스타일시트의 .node-label 규칙보다 우선순위가
-    // 낮아 덮어써진다 — 인라인 style로 지정해야 커스텀 글자색이 실제로 적용됨.
-    if (isTextLike) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+    applyNodeTextStyle(text, node);
     text.textContent = nodeDisplayText(node);
     g.appendChild(text);
     const isSingleSelected = selection.type === 'node' && selection.id === node.id;
@@ -1212,6 +1221,27 @@
     return g;
   }
 
+  // 화살촉(<marker>)은 CSS 클래스(.arrow-fill)로 공통 테마색을 쓰지만, 연결선마다
+  // 색을 다르게 지정하려면 그 색으로 칠해진 marker가 따로 필요하다 — 같은 색을 쓰는
+  // 연결선끼리는 재사용하도록 캐시해둔다. 커스텀 색이 없으면 기존 공용 #arrowHead를 쓴다.
+  const customArrowMarkers = new Set();
+  function ensureArrowMarker(color) {
+    if (!color) return 'arrowHead';
+    const id = 'arrowHead-' + color.replace(/[^a-zA-Z0-9]/g, '');
+    if (!customArrowMarkers.has(id)) {
+      const defs = canvas.querySelector('defs');
+      const marker = svgEl('marker', {
+        id, viewBox: '0 0 10 10', refX: 8.5, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse',
+      });
+      const path = svgEl('path', { d: 'M0,0 L10,5 L0,10 z' });
+      path.style.fill = color;
+      marker.appendChild(path);
+      defs.appendChild(marker);
+      customArrowMarkers.add(id);
+    }
+    return id;
+  }
+
   function buildEdgeEl(edge) {
     const from = state.nodes.find(n => n.id === edge.from);
     const to = state.nodes.find(n => n.id === edge.to);
@@ -1232,13 +1262,17 @@
         const t = i / (dotCount + 1);
         const pt = bezierPoint(p1, ctrl, p2, t);
         const r = 1.8 + t * 5.2;
-        g.appendChild(svgEl('circle', { cx: pt.x, cy: pt.y, r, class: 'edge-bubble-dot' }));
+        const dot = svgEl('circle', { cx: pt.x, cy: pt.y, r, class: 'edge-bubble-dot' });
+        if (edge.color) dot.style.fill = edge.color;
+        g.appendChild(dot);
       }
     } else {
       const line = svgEl('path', { d, class: 'edge-line' });
       if (edge.dashed) line.setAttribute('stroke-dasharray', '7 5');
-      if (edge.arrowEnd) line.setAttribute('marker-end', 'url(#arrowHead)');
-      if (edge.arrowStart) line.setAttribute('marker-start', 'url(#arrowHead)');
+      if (edge.color) line.style.stroke = edge.color;
+      const markerId = ensureArrowMarker(edge.color);
+      if (edge.arrowEnd) line.setAttribute('marker-end', `url(#${markerId})`);
+      if (edge.arrowStart) line.setAttribute('marker-start', `url(#${markerId})`);
       g.appendChild(line);
 
       // 인과 지도 표기: 지연 표시(‖, 곡선 중앙을 가로지르는 두 짧은 선)
@@ -1247,11 +1281,13 @@
         const tickLen = 9, gap = 4;
         for (const off of [-gap, gap]) {
           const bx = mid.x + ux * off, by = mid.y + uy * off;
-          g.appendChild(svgEl('line', {
+          const tick = svgEl('line', {
             x1: bx - px * tickLen / 2, y1: by - py * tickLen / 2,
             x2: bx + px * tickLen / 2, y2: by + py * tickLen / 2,
             class: 'edge-delay-mark',
-          }));
+          });
+          if (edge.color) tick.style.stroke = edge.color;
+          g.appendChild(tick);
         }
       }
 
@@ -1260,6 +1296,7 @@
         const q = bezierPoint(p1, ctrl, p2, 0.78);
         const label = svgEl('text', { x: q.x + px * 11, y: q.y + py * 11, class: 'edge-polarity' });
         label.textContent = edge.polarity;
+        if (edge.color) label.style.fill = edge.color;
         g.appendChild(label);
       }
     }
@@ -1428,7 +1465,7 @@
     if (isTextLikeShape(newShape)) {
       if (newShape === 'loop' && !node.loopType) node.loopType = 'R';
       if (!node.textColor) node.textColor = cssVar('--text') || '#1c2128';
-      const size = measureNodeSize(newShape, node.label, node.loopType);
+      const size = measureNodeSize(newShape, node.label, node.loopType, node.fontSize);
       node.w = size.w; node.h = size.h;
     } else {
       const [w, h] = NODE_DEFAULT_SIZES[newShape] || [150, 90];
@@ -1491,15 +1528,7 @@
       }));
     }
 
-    if (isTextLike) {
-      panelBody.appendChild(field('글자 색', () => {
-        const input = document.createElement('input');
-        input.type = 'color'; input.value = toHex(node.textColor || cssVar('--text') || '#1c2128');
-        input.addEventListener('input', () => { node.textColor = input.value; patchNodeVisual(node); });
-        input.addEventListener('change', () => pushHistory());
-        return input;
-      }));
-    } else {
+    if (!isTextLike) {
       const row = document.createElement('div');
       row.className = 'row2';
       row.appendChild(field('채우기 색', () => {
@@ -1519,6 +1548,30 @@
       panelBody.appendChild(row);
     }
 
+    const textRow = document.createElement('div');
+    textRow.className = 'row2';
+    textRow.appendChild(field('글자 색', () => {
+      const input = document.createElement('input');
+      input.type = 'color'; input.value = toHex(node.textColor || cssVar('--text') || '#1c2128');
+      input.addEventListener('input', () => { node.textColor = input.value; patchNodeVisual(node); });
+      input.addEventListener('change', () => pushHistory());
+      return input;
+    }));
+    textRow.appendChild(field('글자 크기', () => {
+      const input = document.createElement('input');
+      input.type = 'number'; input.min = '8'; input.max = '72'; input.step = '1';
+      input.value = node.fontSize || defaultNodeFontSize(node.shape);
+      input.addEventListener('input', () => {
+        const v = parseInt(input.value, 10);
+        node.fontSize = Number.isFinite(v) && v > 0 ? clamp(v, 8, 72) : undefined;
+        resizeTextLikeNode(node);
+        patchNodeVisual(node);
+      });
+      input.addEventListener('change', () => pushHistory());
+      return input;
+    }));
+    panelBody.appendChild(textRow);
+
     const delBtn = document.createElement('button');
     delBtn.className = 'danger-btn';
     delBtn.textContent = '이 노드 삭제';
@@ -1537,6 +1590,14 @@
       input.type = 'text'; input.value = edge.label;
       input.placeholder = '예: API 호출';
       input.addEventListener('input', () => { edge.label = input.value; render(); });
+      input.addEventListener('change', () => pushHistory());
+      return input;
+    }));
+
+    panelBody.appendChild(field('선 색', () => {
+      const input = document.createElement('input');
+      input.type = 'color'; input.value = toHex(edge.color || cssVar('--edge-color') || '#5b6472');
+      input.addEventListener('input', () => { edge.color = input.value; patchEdgeColor(edge); });
       input.addEventListener('change', () => pushHistory());
       return input;
     }));
@@ -1628,7 +1689,25 @@
     const shape = g.querySelector('.node-shape');
     if (shape) { shape.setAttribute('fill', node.fill); shape.setAttribute('stroke', node.stroke); }
     const text = g.querySelector('.node-label');
-    if (text && isTextLikeShape(node.shape)) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+    if (text) applyNodeTextStyle(text, node);
+  }
+
+  // 연결선 색도 노드 색과 같은 이유로 <input type=color> 드래그 중엔 패널을
+  // 통째로 다시 그리지 않고 SVG만 가볍게 패치한다.
+  function patchEdgeColor(edge) {
+    const g = edgesLayer.querySelector(`.edge[data-id="${edge.id}"]`);
+    if (!g) return;
+    const line = g.querySelector('.edge-line');
+    if (line) {
+      line.style.stroke = edge.color || '';
+      const markerId = ensureArrowMarker(edge.color);
+      if (edge.arrowEnd) line.setAttribute('marker-end', `url(#${markerId})`);
+      if (edge.arrowStart) line.setAttribute('marker-start', `url(#${markerId})`);
+    }
+    g.querySelectorAll('.edge-delay-mark').forEach(el => { el.style.stroke = edge.color || ''; });
+    const polarity = g.querySelector('.edge-polarity');
+    if (polarity) polarity.style.fill = edge.color || '';
+    g.querySelectorAll('.edge-bubble-dot').forEach(el => { el.style.fill = edge.color || ''; });
   }
 
   function renderMultiPanel() {
@@ -1793,10 +1872,19 @@
     node.label = text;
     if (isTextLikeShape(node.shape)) {
       const c = nodeCenter(node);
-      const { w, h } = measureNodeSize(node.shape, node.label, node.loopType);
+      const { w, h } = measureNodeSize(node.shape, node.label, node.loopType, node.fontSize);
       node.w = w; node.h = h;
       node.x = c.x - w / 2; node.y = c.y - h / 2;
     }
+  }
+
+  // 텍스트·루프 노드는 글자 크기가 바뀌면 박스도 그에 맞춰 다시 계산해야 한다.
+  function resizeTextLikeNode(node) {
+    if (!isTextLikeShape(node.shape)) return;
+    const c = nodeCenter(node);
+    const { w, h } = measureNodeSize(node.shape, node.label, node.loopType, node.fontSize);
+    node.w = w; node.h = h;
+    node.x = c.x - w / 2; node.y = c.y - h / 2;
   }
 
   // 속성 패널의 입력창은 SVG 밖에 있으므로, 매 타이핑마다 render()로 패널까지
@@ -1810,10 +1898,17 @@
         text.setAttribute('x', node.w / 2);
         text.setAttribute('y', node.h / 2);
         text.textContent = nodeDisplayText(node);
-        if (isTextLikeShape(node.shape)) text.style.fill = node.textColor || cssVar('--text') || '#1c2128';
+        applyNodeTextStyle(text, node);
       }
       const box = g.querySelector('.text-select-box');
       if (box) setAttrs(box, { x: -4, y: -4, width: node.w + 8, height: node.h + 8 });
+      // 텍스트·루프 노드는 배경 도형이 없어 클릭 판정용 투명 히트 영역(.node-hit)의
+      // 크기도 글자 크기·내용 변화에 맞춰 같이 늘어나야 한다 (안 그러면 커진 글자의
+      // 바깥쪽을 클릭했을 때 선택이 안 됨).
+      if (isTextLikeShape(node.shape)) {
+        const hit = g.querySelector('.node-hit');
+        if (hit) setAttrs(hit, { width: node.w, height: node.h });
+      }
     }
     updateEdgesTouching(node.id);
   }
@@ -2212,6 +2307,23 @@
   // "새로 만들기"는 현재 지도를 지우는 대신 새 탭을 열어 기존 지도를 그대로 남겨둔다.
   document.getElementById('btnNew').addEventListener('click', addNewTabAndSwitch);
 
+  // 드롭다운 메뉴(원형/내보내기)를 트리거 버튼 기준으로 열되, 화면 밖으로
+  // 잘리지 않도록 뷰포트 안쪽으로 clamp한다. 모바일에서 트리거 버튼이
+  // 툴바 중간에 위치해 `right:0` 앵커만으로는 왼쪽 가장자리가 잘리는
+  // 문제(첨부 스크린샷)를 해결하기 위함.
+  function positionDropdownMenu(menu, trigger) {
+    const margin = 8;
+    const triggerRect = trigger.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = (triggerRect.bottom + 6) + 'px';
+    menu.style.right = 'auto';
+    menu.style.left = '0px';
+    const menuWidth = menu.offsetWidth;
+    let left = triggerRect.right - menuWidth;
+    left = Math.max(margin, Math.min(left, window.innerWidth - menuWidth - margin));
+    menu.style.left = left + 'px';
+  }
+
   // 시스템 원형(archetype) 템플릿 드롭다운
   const archetypeMenu = document.getElementById('archetypeMenu');
   for (const tpl of ARCHETYPE_TEMPLATES) {
@@ -2245,7 +2357,9 @@
   document.getElementById('btnArchetype').addEventListener('click', (e) => {
     e.stopPropagation();
     exportMenu.hidden = true;
+    const willOpen = archetypeMenu.hidden;
     archetypeMenu.hidden = !archetypeMenu.hidden;
+    if (willOpen) positionDropdownMenu(archetypeMenu, e.currentTarget);
   });
 
   // Export dropdown
@@ -2253,9 +2367,15 @@
   document.getElementById('btnExport').addEventListener('click', (e) => {
     e.stopPropagation();
     archetypeMenu.hidden = true;
+    const willOpen = exportMenu.hidden;
     exportMenu.hidden = !exportMenu.hidden;
+    if (willOpen) positionDropdownMenu(exportMenu, e.currentTarget);
   });
   document.addEventListener('click', () => { exportMenu.hidden = true; archetypeMenu.hidden = true; });
+  window.addEventListener('resize', () => {
+    if (!archetypeMenu.hidden) positionDropdownMenu(archetypeMenu, document.getElementById('btnArchetype'));
+    if (!exportMenu.hidden) positionDropdownMenu(exportMenu, document.getElementById('btnExport'));
+  });
 
   document.getElementById('btnExportJson').addEventListener('click', () => {
     exportFile(`${exportBaseName()}.json`, 'JSON 파일', { 'application/json': ['.json'] },
@@ -2366,6 +2486,7 @@
       text { font-family: -apple-system, "Apple SD Gothic Neo", "Segoe UI", Roboto, sans-serif; }
       .node-label { fill: ${textColor}; font-size: 13px; text-anchor: middle; dominant-baseline: central; }
       .node-label.loop-label { font-size: 15px; font-weight: 700; }
+      .arrow-fill { fill: ${edgeColor}; }
       .edge-line { stroke: ${edgeColor}; stroke-width: 2; fill: none; }
       .edge-label { fill: ${textColor}; font-size: 11.5px; text-anchor: middle; dominant-baseline: central; }
       .edge-label-bg { fill: ${bg}; opacity: 0.92; }
