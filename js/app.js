@@ -1966,6 +1966,8 @@
   // Pointer interaction
   // ===========================================================================================
   let drag = null; // {type, ...}
+  const activePointers = new Map(); // pointerId -> {x,y} — 모바일 두 손가락 핀치 확대/축소 추적용
+  let pinch = null; // { startDist, baseScale }
   let lastClick = null; // {type, id, time} — manual double-click/tap detection.
   // Chromium suppresses the native `dblclick` event when the first click's
   // pointerdown called setPointerCapture (as ours does for drag/pan), which
@@ -1984,6 +1986,24 @@
     // this pointerdown — otherwise Chrome reasserts focus on `canvas` right
     // after we focus() an inline-edit <input>, which immediately blurs it.
     evt.preventDefault();
+
+    // 두 손가락 핀치 확대/축소: 두 번째 손가락이 닿는 순간 감지해서, 진행 중이던
+    // 단일 포인터 동작(패닝 등)을 취소하고 핀치 모드로 전환한다.
+    if (evt.pointerType === 'touch') {
+      activePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+      if (activePointers.size === 2) {
+        drag = null;
+        canvas.classList.remove('panning');
+        for (const pid of activePointers.keys()) {
+          try { canvas.setPointerCapture(pid); } catch (e) {}
+        }
+        const pts = [...activePointers.values()];
+        pinch = { startDist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), baseScale: view.scale };
+        return;
+      }
+      if (activePointers.size > 2) return; // 세 손가락 이상은 무시
+    }
+
     const target = evt.target;
     const resizeHandle = target.closest && target.closest('[data-resize]');
     const bendHandle = target.closest && target.closest('[data-bend]');
@@ -2109,6 +2129,22 @@
   });
 
   canvas.addEventListener('pointermove', (evt) => {
+    if (evt.pointerType === 'touch' && activePointers.has(evt.pointerId)) {
+      activePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY });
+    }
+    if (pinch && activePointers.size === 2) {
+      const pts = [...activePointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const midX = (pts[0].x + pts[1].x) / 2, midY = (pts[0].y + pts[1].y) / 2;
+      const rect = canvas.getBoundingClientRect();
+      const lx = midX - rect.left, ly = midY - rect.top;
+      const worldX = (lx - view.x) / view.scale, worldY = (ly - view.y) / view.scale;
+      view.scale = clamp(pinch.baseScale * (dist / pinch.startDist), 0.15, 3);
+      view.x = lx - worldX * view.scale;
+      view.y = ly - worldY * view.scale;
+      applyViewTransform();
+      return;
+    }
     if (!drag) return;
     if (drag.type === 'pan') {
       view.x = drag.startViewX + (evt.clientX - drag.startClientX);
@@ -2169,6 +2205,10 @@
   });
 
   function endDrag(evt) {
+    if (evt.pointerType === 'touch') {
+      activePointers.delete(evt.pointerId);
+      if (pinch && activePointers.size < 2) pinch = null;
+    }
     if (!drag) return;
     const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'bend' || (drag.type === 'move-multi' && drag.moved);
     const wasBend = drag.type === 'bend';
@@ -2290,6 +2330,21 @@
   document.getElementById('btnZoomOut').addEventListener('click', () => zoomBy(1 / 1.2));
   document.getElementById('btnZoomReset').addEventListener('click', zoomToFit);
   document.getElementById('panelClose').addEventListener('click', clearSelection);
+  // 패널 안의 빈 여백(필드 사이 간격, 헤더 제목, 안내 문구 등 — 입력칸·버튼·
+  // 드롭다운이 아닌 곳)을 눌러도 선택 해제. 모바일에서는 패널이 캔버스 대부분을
+  // 덮어버려 "빈 캔버스를 눌러 선택 해제"할 자리가 거의 남지 않기 때문에 필요함.
+  // 단, 캔버스에서 시작된 드래그(노드 이동 등)가 패널 쪽에서 끝나며 발생하는
+  // click까지 반응하면 안 되므로 — pointerdown도 패널 빈 곳에서 시작됐을 때만
+  // 인정한다 (캔버스에서 노드를 끌어 패널 밑으로 옮겨 넣고 손을 뗄 때 실수로
+  // 선택이 풀리는 것을 방지).
+  let panelBlankPointerDown = false;
+  propsPanel.addEventListener('pointerdown', (evt) => {
+    panelBlankPointerDown = !evt.target.closest('input, select, textarea, button, a');
+  });
+  propsPanel.addEventListener('click', (evt) => {
+    if (panelBlankPointerDown && !evt.target.closest('input, select, textarea, button, a')) clearSelection();
+    panelBlankPointerDown = false;
+  });
 
   function zoomBy(factor) {
     const rect = canvasWrap.getBoundingClientRect();
