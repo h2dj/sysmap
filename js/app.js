@@ -120,6 +120,21 @@
     return { w, h, lines };
   }
 
+  // 텍스트·루프 노드의 폭을 오른쪽 손잡이로 직접 조절했을 때(node.manualWidth) 쓰는
+  // 높이 계산 — measureNodeSize처럼 "이 글자에 알맞은" 폭을 새로 정하지 않고, 이미
+  // 정해진 node.w 안에서만 줄바꿈해 그 줄 수에 맞는 높이만 돌려준다.
+  function textNodeHeightForWidth(node) {
+    const isLoop = node.shape === 'loop';
+    const fontSize = node.fontSize || defaultNodeFontSize(node.shape);
+    const font = `${isLoop ? 700 : 400} ${fontSize}px ${FONT_STACK}`;
+    const display = isLoop ? loopDisplayText(node.label, node.loopType) : (node.label || '');
+    const maxWidth = Math.max(20, node.w - nodeLabelPadding(node.shape));
+    const lines = wrapLabelLines(display, maxWidth, font);
+    const baseH = Math.ceil(fontSize * 1.5) + 16;
+    const lineHeight = Math.ceil(fontSize * 1.3);
+    return lines.length > 1 ? baseH + (lines.length - 1) * lineHeight : baseH;
+  }
+
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
@@ -1567,6 +1582,17 @@
           class: 'text-select-box',
         });
         g.insertBefore(box, g.firstChild);
+        // 텍스트·루프 노드는 배경 도형이 없어 높이는 글자 크기·줄바꿈에 맞춰
+        // 자동으로만 정해지지만, 폭은 오른쪽 가장자리의 세로 막대 손잡이로 직접
+        // 조절할 수 있다 — 좁게 줄이면 그 폭 안에서 줄바꿈되고, 넓히면 한 줄에
+        // 더 많은 글자가 들어간다(resizeTextLikeNode/setNodeLabel의 manualWidth 참고).
+        if (isTextLike && isSingleSelected) {
+          const handleW = svgEl('rect', {
+            x: node.w - 5, y: node.h / 2 - 10, width: 10, height: 20, rx: 3,
+            class: 'resize-handle resize-handle-h', 'data-resize-w': node.id,
+          });
+          g.appendChild(handleW);
+        }
       } else {
         const handle = svgEl('rect', {
           x: node.w - 8, y: node.h - 8, width: 14, height: 14,
@@ -1823,6 +1849,10 @@
     if (isTextLikeShape(newShape)) {
       if (newShape === 'loop' && !node.loopType) node.loopType = 'R';
       if (!node.textColor) node.textColor = cssVar('--text') || '#1c2128';
+      // 이전에 폭을 직접 조절해뒀던 상태(manualWidth)가 남아있으면, 모양을 바꾸면서
+      // 새로 계산한 이 자동 맞춤 폭을 다음 번 rename에서 "사용자가 정한 폭"으로
+      // 오해하지 않도록 초기화한다.
+      node.manualWidth = false;
       const size = measureNodeSize(newShape, node.label, node.loopType, node.fontSize);
       node.w = size.w; node.h = size.h;
     } else {
@@ -2236,6 +2266,13 @@
     node.label = text;
     if (isTextLikeShape(node.shape)) {
       const c = nodeCenter(node);
+      if (node.manualWidth) {
+        // 폭을 손잡이로 직접 정해둔 노드는 그 폭을 유지한 채(왼쪽 가장자리 고정),
+        // 새 글자 수에 맞춰 줄바꿈된 결과의 높이만 다시 계산한다.
+        node.h = textNodeHeightForWidth(node);
+        node.y = c.y - node.h / 2;
+        return;
+      }
       const { w, h } = measureNodeSize(node.shape, node.label, node.loopType, node.fontSize);
       node.w = w; node.h = h;
       node.x = c.x - w / 2; node.y = c.y - h / 2;
@@ -2260,6 +2297,11 @@
   function resizeTextLikeNode(node) {
     if (!isTextLikeShape(node.shape)) return;
     const c = nodeCenter(node);
+    if (node.manualWidth) {
+      node.h = textNodeHeightForWidth(node);
+      node.y = c.y - node.h / 2;
+      return;
+    }
     const { w, h } = measureNodeSize(node.shape, node.label, node.loopType, node.fontSize);
     node.w = w; node.h = h;
     node.x = c.x - w / 2; node.y = c.y - h / 2;
@@ -2294,6 +2336,8 @@
       }
       const handle = g.querySelector('[data-resize]');
       if (handle) setAttrs(handle, { x: node.w - 8, y: node.h - 8 });
+      const handleW = g.querySelector('[data-resize-w]');
+      if (handleW) setAttrs(handleW, { x: node.w - 5, y: node.h / 2 - 10 });
     }
     updateEdgesTouching(node.id);
   }
@@ -2391,6 +2435,7 @@
 
     const target = evt.target;
     const resizeHandle = target.closest && target.closest('[data-resize]');
+    const resizeWidthHandle = target.closest && target.closest('[data-resize-w]');
     const bendHandle = target.closest && target.closest('[data-bend]');
     const nodeGroup = target.closest && target.closest('.node');
     const edgeGroup = target.closest && target.closest('.edge');
@@ -2431,6 +2476,16 @@
       const node = state.nodes.find(n => n.id === resizeHandle.dataset.resize);
       if (!node) return;
       drag = { type: 'resize', id: node.id, startW: node.w, startH: node.h, startWorld: world };
+      canvas.setPointerCapture(evt.pointerId);
+      return;
+    }
+    if (resizeWidthHandle) {
+      const node = state.nodes.find(n => n.id === resizeWidthHandle.dataset.resizeW);
+      if (!node) return;
+      // 텍스트·루프 노드는 왼쪽 가장자리(node.x)를 고정한 채 폭만 조절하고,
+      // 세로 중심은 드래그 시작 시점의 중심을 유지한다(높이는 줄바꿈 결과에
+      // 따라 자동으로 바뀌므로, 사용자가 위아래로 흔들려도 상관없게).
+      drag = { type: 'resize-width', id: node.id, startW: node.w, startWorld: world, centerY: nodeCenter(node).y };
       canvas.setPointerCapture(evt.pointerId);
       return;
     }
@@ -2561,6 +2616,27 @@
         if (handle) { handle.setAttribute('x', node.w - 8); handle.setAttribute('y', node.h - 8); }
       }
       updateEdgesTouching(node.id);
+    } else if (drag.type === 'resize-width') {
+      const node = state.nodes.find(n => n.id === drag.id);
+      if (!node) return;
+      const world = worldFromEvent(evt);
+      node.w = clamp(drag.startW + (world.x - drag.startWorld.x), 40, 2000);
+      node.manualWidth = true;
+      node.h = textNodeHeightForWidth(node);
+      node.y = drag.centerY - node.h / 2;
+      const g = nodesLayer.querySelector(`.node[data-id="${node.id}"]`);
+      if (g) {
+        g.setAttribute('transform', `translate(${node.x} ${node.y})`);
+        const hit = g.querySelector('.node-hit');
+        if (hit) setAttrs(hit, { width: node.w, height: node.h });
+        const box = g.querySelector('.text-select-box');
+        if (box) setAttrs(box, { x: -4, y: -4, width: node.w + 8, height: node.h + 8 });
+        const text = g.querySelector('.node-label');
+        if (text) renderLabelTspans(text, node);
+        const handleW = g.querySelector('[data-resize-w]');
+        if (handleW) setAttrs(handleW, { x: node.w - 5, y: node.h / 2 - 10 });
+      }
+      updateEdgesTouching(node.id);
     } else if (drag.type === 'bend') {
       const edge = state.edges.find(e => e.id === drag.id);
       if (!edge) return;
@@ -2595,7 +2671,7 @@
       if (pinch && activePointers.size < 2) pinch = null;
     }
     if (!drag) return;
-    const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'bend' || (drag.type === 'move-multi' && drag.moved);
+    const wasStructural = drag.type === 'move' || drag.type === 'resize' || drag.type === 'resize-width' || drag.type === 'bend' || (drag.type === 'move-multi' && drag.moved);
     const wasBend = drag.type === 'bend';
     const finishedDrag = drag;
     canvas.classList.remove('panning');
@@ -2945,6 +3021,7 @@
     clone.querySelectorAll('.ui-only').forEach(el => el.remove());
     clone.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
     clone.querySelectorAll('[data-resize]').forEach(el => el.remove());
+    clone.querySelectorAll('[data-resize-w]').forEach(el => el.remove());
     clone.querySelectorAll('[data-bend]').forEach(el => el.remove());
     clone.querySelectorAll('.text-select-box').forEach(el => el.remove());
     // 클릭 판정용 투명 히트 영역들 — 정적 내보내기에는 필요 없고, 남겨두면
