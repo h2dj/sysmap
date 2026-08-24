@@ -135,6 +135,25 @@
   // 두 노드를 잇는 곡선(2차 베지어) 앵커점 계산: 경계 접점 p1/p2, 제어점 ctrl,
   // 접선 방향(ux,uy), 수직 방향(px,py — 곡률·지연 표시·극성 표시 오프셋에 사용).
   function edgeAnchorPoints(edge, from, to) {
+    // 자기 참조(self-loop): 두 중심이 같은 점이라 방향 벡터가 정의되지 않으므로
+    // (전형적인 두 노드 사이 곡선 계산과 별개로) 노드 위쪽에서 나갔다가 다시
+    // 위쪽으로 들어오는 작은 고리 모양을 직접 그린다. bend는 고리가 위로
+    // 얼마나 솟아오르는지를 조절하는 손잡이로 그대로 재사용된다.
+    if (edge.from === edge.to) {
+      const node = from;
+      const c = nodeCenter(node);
+      const hw = node.w / 2, hh = node.h / 2;
+      const spread = Math.max(14, Math.min(hw * 0.6, 28));
+      const p1 = { x: c.x - spread, y: c.y - hh };
+      const p2 = { x: c.x + spread, y: c.y - hh };
+      const bend = edge.bend || 0;
+      const ctrl = { x: c.x, y: c.y - hh + bend };
+      const dx = p2.x - p1.x, dy = p2.y - p1.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const px = -uy, py = ux;
+      return { p1, p2, ctrl, ux, uy, px, py };
+    }
     const cFrom = nodeCenter(from), cTo = nodeCenter(to);
     const dxC = cTo.x - cFrom.x, dyC = cTo.y - cFrom.y;
     const lenC = Math.hypot(dxC, dyC) || 1;
@@ -814,6 +833,27 @@
       id: uid(), from: fromId, to: toId, label: '',
       dashed: false, arrowStart: false, arrowEnd: true,
       bend: 0, delay: false, polarity: '', bubble: false, color: '',
+    };
+    state.edges.push(edge);
+    render();
+    pushHistory();
+    selectItem('edge', edge.id);
+    return edge;
+  }
+
+  // Shift+Insert: 새 노드를 만들지 않고, 선택한 노드에서 자기 자신으로 되돌아오는
+  // 자기 참조(self-loop) 연결선만 추가한다 — 스스로를 강화/제약하는 변수를
+  // 표기할 때 씀 (addEdge()는 from===to를 일반 연결 도구의 실수 방지용으로
+  // 막아두므로 여기서 직접 만든다). 같은 노드에 이미 자기 참조가 있으면
+  // 겹치지 않도록 고리를 조금씩 더 위로 벌려 쌓는다.
+  function addSelfLoopEdge(nodeId) {
+    const node = state.nodes.find(n => n.id === nodeId);
+    if (!node) return null;
+    const existingCount = state.edges.filter(e => e.from === nodeId && e.to === nodeId).length;
+    const edge = {
+      id: uid(), from: nodeId, to: nodeId, label: '',
+      dashed: false, arrowStart: false, arrowEnd: true,
+      bend: -(70 + existingCount * 30), delay: false, polarity: '', bubble: false, color: '',
     };
     state.edges.push(edge);
     render();
@@ -2281,7 +2321,7 @@
     canvas.classList.toggle('tool-connect', name === 'connect');
     canvas.classList.toggle('tool-add', SHAPE_TOOLS.includes(name));
     const hints = {
-      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. Shift+클릭이나 Shift+드래그로 여러 요소를 한꺼번에 선택할 수 있습니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다.',
+      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. Shift+클릭이나 Shift+드래그로 여러 요소를 한꺼번에 선택할 수 있습니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다 (Shift+Insert는 노드를 추가하지 않고 자기 자신에게 돌아오는 연결선만 만듦).',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
       circle: '캔버스를 클릭해 원형 노드를 추가하세요.',
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
@@ -2636,7 +2676,12 @@
 
     if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelection(); return; }
     if (evt.key === 'Escape') { clearSelection(); setTool('select'); return; }
-    if (evt.key === 'Insert' && selection.type === 'node') { evt.preventDefault(); duplicateConnected(selection.id); return; }
+    if (evt.key === 'Insert' && selection.type === 'node') {
+      evt.preventDefault();
+      if (evt.shiftKey) addSelfLoopEdge(selection.id);
+      else duplicateConnected(selection.id);
+      return;
+    }
     // F2: 더블클릭과 동일하게 선택된 노드·연결선의 텍스트를 바로 편집 모드로 연다.
     if (evt.key === 'F2' && selection.type) { evt.preventDefault(); startInlineEdit(selection.type, selection.id); return; }
 
