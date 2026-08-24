@@ -161,7 +161,7 @@ body {
   padding: 1px 4px;
   outline: none;
 }
-.tab-close {
+.tab-close, .tab-duplicate {
   border: none;
   background: none;
   color: inherit;
@@ -173,7 +173,9 @@ body {
   cursor: pointer;
   flex: 0 0 auto;
 }
+.tab-duplicate { font-size: 11px; }
 .tab-close:hover { opacity: 1; background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.tab-duplicate:hover { opacity: 1; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .tab-add {
   flex: 0 0 auto;
   align-self: center;
