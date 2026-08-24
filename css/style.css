@@ -540,7 +540,7 @@ body {
 .panel-body { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
-.field input[type="text"], .field select, .field textarea {
+.field input[type="text"], .field input[type="number"], .field select, .field textarea {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
