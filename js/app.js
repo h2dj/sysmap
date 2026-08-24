@@ -40,26 +40,84 @@
   const measureCtx = document.createElement('canvas').getContext('2d');
   function loopDisplayText(label, loopType) { return `${LOOP_ICON[loopType] || LOOP_ICON.R} ${label || ''}`; }
   function defaultNodeFontSize(shape) { return shape === 'loop' ? 15 : 13; }
+
+  // 긴 텍스트를 폭에 맞춰 여러 줄로 쪼갠다. 공백 단위로 우선 나누고, 공백이 없는
+  // 단어(또는 한글 구절) 하나만으로도 폭을 넘으면 글자 단위로 이진 탐색해 강제로
+  // 줄바꿈한다 — 영문 긴 단어든 띄어쓰기 없는 한글이든 무한정 옆으로 넘치지 않게 함.
+  // maxWidth가 아주 작아도(0 이하) 최소 한 글자씩은 진행해 무한 루프에 빠지지 않는다.
+  function wrapLabelLines(str, maxWidth, font) {
+    str = (str || '').trim();
+    if (!str) return [''];
+    measureCtx.font = font;
+    if (measureCtx.measureText(str).width <= maxWidth) return [str];
+    const words = str.split(/\s+/);
+    const lines = [];
+    let current = '';
+    const splitLongWord = (word) => {
+      let chunk = '';
+      for (const ch of word) {
+        const candidate = chunk + ch;
+        if (chunk === '' || measureCtx.measureText(candidate).width <= maxWidth) {
+          chunk = candidate;
+        } else {
+          lines.push(chunk);
+          chunk = ch;
+        }
+      }
+      return chunk;
+    };
+    for (let word of words) {
+      if (measureCtx.measureText(word).width > maxWidth) {
+        if (current) { lines.push(current); current = ''; }
+        current = splitLongWord(word);
+        continue;
+      }
+      const candidate = current ? current + ' ' + word : word;
+      if (measureCtx.measureText(candidate).width <= maxWidth) {
+        current = candidate;
+      } else {
+        if (current) lines.push(current);
+        current = word;
+      }
+    }
+    if (current) lines.push(current);
+    return lines.length ? lines : [''];
+  }
+
+  // 도형 배경이 있는 노드(사각형/원/마름모/말풍선)와 배경 없는 텍스트·루프 노드는
+  // 좌우 여백이 달라, 같은 폭 제한이라도 실제로 줄바꿈할 수 있는 글자 폭이 다르다.
+  function nodeLabelPadding(shape) { return isTextLikeShape(shape) ? 20 : 56; }
+  const SHAPE_TEXT_MAX_WIDTH = 174; // 230(도형 폭 상한) - 56(좌우 여백)
+  const TEXT_LIKE_MAX_WIDTH = 240;  // 배경 없는 텍스트·루프 노드가 한 줄로 무한정 늘어나지 않게 하는 상한
+  const SHAPE_EXTRA_LINE_HEIGHT = 16;
+
   function measureNodeSize(shape, label, loopType, fontSize) {
     const isLoop = shape === 'loop';
     fontSize = fontSize || defaultNodeFontSize(shape);
     const fontWeight = isLoop ? 700 : 400;
-    measureCtx.font = `${fontWeight} ${fontSize}px ${FONT_STACK}`;
+    const font = `${fontWeight} ${fontSize}px ${FONT_STACK}`;
     const display = isLoop ? loopDisplayText(label, loopType) : (label || '');
-    const textW = measureCtx.measureText(display || ' ').width;
+    const lines = wrapLabelLines(display, TEXT_LIKE_MAX_WIDTH, font);
+    measureCtx.font = font;
+    const textW = Math.max(0, ...lines.map(l => measureCtx.measureText(l || ' ').width));
     const w = Math.max(30, Math.ceil(textW) + 20);
-    const h = Math.ceil(fontSize * 1.5) + 16;
-    return { w, h };
+    const baseH = Math.ceil(fontSize * 1.5) + 16;
+    const lineHeight = Math.ceil(fontSize * 1.3);
+    const h = lines.length > 1 ? baseH + (lines.length - 1) * lineHeight : baseH;
+    return { w, h, lines };
   }
   // 원형(archetype) 템플릿 배치용: 사각형·원·마름모 노드도 라벨 길이에 맞춰
   // 대략적인 크기를 미리 계산해, 긴 한글 라벨이라도 서로 겹치지 않게 배치한다.
   function autoNodeSize(shape, label) {
     if (shape === 'text' || shape === 'loop') return measureNodeSize(shape, label, 'R');
-    measureCtx.font = `400 13px ${FONT_STACK}`;
-    const textW = measureCtx.measureText(label || '').width;
+    const font = `400 13px ${FONT_STACK}`;
+    const lines = wrapLabelLines(label || '', SHAPE_TEXT_MAX_WIDTH, font);
+    measureCtx.font = font;
+    const textW = Math.max(0, ...lines.map(l => measureCtx.measureText(l || ' ').width));
     const w = clamp(Math.ceil(textW) + 56, 130, 230);
-    const h = shape === 'circle' ? Math.max(96, Math.round(w * 0.62)) : 74;
-    return { w, h };
+    const baseH = shape === 'circle' ? Math.max(96, Math.round(w * 0.62)) : 74;
+    const h = lines.length > 1 ? baseH + (lines.length - 1) * SHAPE_EXTRA_LINE_HEIGHT : baseH;
+    return { w, h, lines };
   }
 
   // ---------------------------------------------------------------------
@@ -1465,6 +1523,27 @@
     return node.shape === 'loop' ? loopDisplayText(node.label, node.loopType) : node.label;
   }
 
+  // 긴 라벨을 <text> 하나로 렌더링하면 SVG는 알아서 줄바꿈해주지 않아 옆으로
+  // 계속 삐져나온다 — 노드의 현재 폭(수동으로 크기를 늘리거나 줄인 경우도 포함)
+  // 에 맞춰 매번 다시 줄바꿈한 뒤 <tspan> 여러 줄로 채워 넣고, 전체 줄 묶음이
+  // 세로 중앙(node.h/2)에 오도록 첫 줄의 dy를 위로 당겨서 시작한다.
+  function renderLabelTspans(text, node) {
+    const fontSize = node.fontSize || defaultNodeFontSize(node.shape);
+    const fontWeight = node.shape === 'loop' ? 700 : 400;
+    const font = `${fontWeight} ${fontSize}px ${FONT_STACK}`;
+    const maxWidth = Math.max(20, node.w - nodeLabelPadding(node.shape));
+    const lines = wrapLabelLines(nodeDisplayText(node), maxWidth, font);
+    const lineHeight = Math.ceil(fontSize * 1.3);
+    text.textContent = '';
+    text.setAttribute('y', node.h / 2);
+    const startDy = -((lines.length - 1) * lineHeight) / 2;
+    lines.forEach((line, i) => {
+      const tspan = svgEl('tspan', { x: node.w / 2, dy: i === 0 ? startDy : lineHeight });
+      tspan.textContent = line;
+      text.appendChild(tspan);
+    });
+  }
+
   function buildNodeEl(node) {
     const g = svgEl('g', { class: 'node', 'data-id': node.id, transform: `translate(${node.x} ${node.y})` });
     const shape = shapeEl(node);
@@ -1475,7 +1554,7 @@
       class: 'node-label' + (node.shape === 'loop' ? ' loop-label' : ''),
     });
     applyNodeTextStyle(text, node);
-    text.textContent = nodeDisplayText(node);
+    renderLabelTspans(text, node);
     g.appendChild(text);
     const isSingleSelected = selection.type === 'node' && selection.id === node.id;
     if (isSingleSelected || isMultiSelected('node', node.id)) {
@@ -2147,6 +2226,12 @@
   }
 
   // 텍스트·루프 노드는 글자가 바뀌면 박스 크기(가운데 정렬 유지)도 다시 잰다.
+  // 사각형/원/마름모/말풍선은 기본 폭(150px 등)이 좁아, 폭을 전혀 안 늘리고 그
+  // 안에서만 줄바꿈하면 한 줄에 한두 글자만 들어가는 좁고 긴 모양이 되기 쉽다.
+  // 그래서 autoNodeSize와 같은 기준으로 "이 글자에 적당한" 폭·높이를 다시 계산해,
+  // 기존 크기보다 클 때만 키운다(가운데 정렬 유지). 사용자가 손잡이로 직접 더
+  // 크게 늘려둔 상태라면 그 크기를 그대로 존중하고, 짧은 글로 바꿨다고 자동으로
+  // 다시 줄이지는 않는다(당황스러움 방지).
   function setNodeLabel(node, text) {
     node.label = text;
     if (isTextLikeShape(node.shape)) {
@@ -2154,6 +2239,20 @@
       const { w, h } = measureNodeSize(node.shape, node.label, node.loopType, node.fontSize);
       node.w = w; node.h = h;
       node.x = c.x - w / 2; node.y = c.y - h / 2;
+      return;
+    }
+    const auto = autoNodeSize(node.shape, node.label);
+    const newW = Math.max(node.w, auto.w);
+    const font = `400 13px ${FONT_STACK}`;
+    const maxWidth = Math.max(20, newW - nodeLabelPadding(node.shape));
+    const lines = wrapLabelLines(node.label, maxWidth, font);
+    const baseH = node.shape === 'circle' ? Math.max(96, Math.round(newW * 0.62)) : 74;
+    const neededH = lines.length > 1 ? baseH + (lines.length - 1) * SHAPE_EXTRA_LINE_HEIGHT : baseH;
+    const newH = Math.max(node.h, neededH);
+    if (newW !== node.w || newH !== node.h) {
+      const c = nodeCenter(node);
+      node.w = newW; node.h = newH;
+      node.x = c.x - newW / 2; node.y = c.y - newH / 2;
     }
   }
 
@@ -2172,12 +2271,17 @@
     const g = nodesLayer.querySelector(`.node[data-id="${node.id}"]`);
     if (g) {
       g.setAttribute('transform', `translate(${node.x} ${node.y})`);
+      // 사각형/원/마름모/말풍선은 긴 글이 줄바꿈되며 높이가 늘어날 수 있으니
+      // (setNodeLabel 참고) 도형 자체도 새 크기로 다시 그린다.
+      if (!isTextLikeShape(node.shape)) {
+        g.querySelector('.node-shape')?.remove();
+        g.prepend(shapeEl(node));
+      }
       const text = g.querySelector('.node-label');
       if (text) {
         text.setAttribute('x', node.w / 2);
-        text.setAttribute('y', node.h / 2);
-        text.textContent = nodeDisplayText(node);
         applyNodeTextStyle(text, node);
+        renderLabelTspans(text, node);
       }
       const box = g.querySelector('.text-select-box');
       if (box) setAttrs(box, { x: -4, y: -4, width: node.w + 8, height: node.h + 8 });
@@ -2188,6 +2292,8 @@
         const hit = g.querySelector('.node-hit');
         if (hit) setAttrs(hit, { width: node.w, height: node.h });
       }
+      const handle = g.querySelector('[data-resize]');
+      if (handle) setAttrs(handle, { x: node.w - 8, y: node.h - 8 });
     }
     updateEdgesTouching(node.id);
   }
@@ -2450,7 +2556,7 @@
         g.querySelector('.node-shape')?.remove();
         g.prepend(shapeEl(node));
         const text = g.querySelector('.node-label');
-        if (text) { text.setAttribute('x', node.w / 2); text.setAttribute('y', node.h / 2); }
+        if (text) renderLabelTspans(text, node);
         const handle = g.querySelector('[data-resize]');
         if (handle) { handle.setAttribute('x', node.w - 8); handle.setAttribute('y', node.h - 8); }
       }
