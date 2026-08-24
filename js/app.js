@@ -2950,6 +2950,24 @@
     }
     if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'y') { evt.preventDefault(); redo(); return; }
 
+    // Ctrl+A: 캔버스에 노드가 하나 이상 있을 때만 전체 선택으로 가로채고(없으면 브라우저
+    // 기본 동작을 막지 않음), 노드만 전부 선택한다(마퀴 선택과 같은 규칙 — 연결선은 대상 밖).
+    if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'a') {
+      if (state.nodes.length === 0) return;
+      evt.preventDefault();
+      const all = state.nodes.map(n => ({ type: 'node', id: n.id }));
+      if (all.length >= 2) {
+        multiSelection = all;
+        selection = { type: null, id: null };
+      } else {
+        selection = { type: 'node', id: all[0].id };
+        multiSelection = [];
+      }
+      render();
+      updatePanel();
+      return;
+    }
+
     if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelection(); return; }
     if (evt.key === 'Escape') { clearSelection(); setTool('select'); return; }
     if (evt.key === 'Insert' && selection.type === 'node') {
