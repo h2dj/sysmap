@@ -154,6 +154,12 @@
   let history = [];
   let historyIndex = -1;
   let autosaveTimer = null;
+  // Ctrl+C/Ctrl+V 클립보드: 탭 사이를 옮겨도(라이브 참조가 아니라 깊은 복사본이라) 그대로
+  // 붙여넣을 수 있게 탭별 state가 아니라 모듈 전역에 둔다. pasteOffsetStep은 같은 복사본을
+  // 연속으로 여러 번 붙여넣을 때마다 조금씩 더 벌어지게(대각선으로 쌓이게) 세는 카운터로,
+  // 새로 복사할 때마다 0으로 되돌아간다.
+  let clipboard = null;
+  let pasteOffsetStep = 0;
 
   // ---- 탭 -----------------------------------------------------------------------------------
   let tabs = [];
@@ -468,6 +474,27 @@
     scheduleAutosave();
   }
 
+  // 탭을 통째로 복제해 바로 옆에 새 탭으로 열고 전환한다. 내용(노드·연결선·제목)과 현재
+  // 화면 확대/이동 위치는 그대로 옮기되, 노드·연결선 id는 전부 새로 발급하고(cloneNodesAndEdges
+  // — 원본과 뒤섞이지 않도록) 실행취소 이력은 새 탭 특유의 것이라 새로 시작한다(원본의 되돌리기
+  // 이력까지 옮길 이유는 없음).
+  function duplicateTab(id) {
+    const t = tabs.find(x => x.id === id);
+    if (!t) return;
+    // 다른 탭 전환 함수들과 동일하게, 전환하기 전에 지금 활성 탭의 최신 view/history부터
+    // 먼저 tabs[]에 반영한다 — 복제 대상이 마침 활성 탭이라면 이 한 번의 flush로 t.view도
+    // 최신 화면 확대/이동 위치를 갖게 된다.
+    flushActiveTab();
+    const { nodes, edges } = cloneNodesAndEdges(t.state.nodes, t.state.edges);
+    const newState = { title: t.state.title, nodes, edges };
+    const newTab = { id: uid(), state: newState, view: { ...t.view }, history: [JSON.stringify(newState)], historyIndex: 0 };
+    const idx = tabs.findIndex(x => x.id === id);
+    tabs.splice(idx + 1, 0, newTab);
+    activateTab(newTab.id);
+    pushHistory();
+    scheduleAutosave();
+  }
+
   function closeTab(id) {
     const t = tabs.find(x => x.id === id);
     if (!t) return;
@@ -503,6 +530,13 @@
       label.className = 'tab-label';
       label.textContent = title && title.trim() ? title.trim() : '제목 없음';
       el.appendChild(label);
+      const dupBtn = document.createElement('button');
+      dupBtn.className = 'tab-duplicate';
+      dupBtn.type = 'button';
+      dupBtn.title = '탭 복제';
+      dupBtn.textContent = '⧉';
+      dupBtn.addEventListener('click', (e) => { e.stopPropagation(); duplicateTab(t.id); });
+      el.appendChild(dupBtn);
       const closeBtn = document.createElement('button');
       closeBtn.className = 'tab-close';
       closeBtn.type = 'button';
@@ -1209,6 +1243,72 @@
     render();
     pushHistory();
     return clone;
+  }
+
+  // 노드·연결선 배열을 깊은 복사하면서 id(그리고 groupId, 연결선의 from/to)를 전부 새로
+  // 발급한다 — 원본과 사본이 같은 id를 공유하면 나중에 실행취소·선택 등에서 서로 뒤섞일
+  // 수 있으므로 항상 완전히 분리한다. 붙여넣기(pasteClipboard)와 탭 복제(duplicateTab)가
+  // 공통으로 쓴다.
+  function cloneNodesAndEdges(nodes, edges) {
+    const idMap = {};
+    const groupIdMap = {};
+    const newNodes = nodes.map(n => {
+      const clone = JSON.parse(JSON.stringify(n));
+      idMap[n.id] = clone.id = uid();
+      if (clone.groupId) clone.groupId = groupIdMap[n.groupId] || (groupIdMap[n.groupId] = uid());
+      return clone;
+    });
+    const newEdges = edges
+      .filter(e => idMap[e.from] && idMap[e.to])
+      .map(e => {
+        const clone = JSON.parse(JSON.stringify(e));
+        clone.id = uid();
+        clone.from = idMap[e.from];
+        clone.to = idMap[e.to];
+        return clone;
+      });
+    return { nodes: newNodes, edges: newEdges, idMap };
+  }
+
+  // ---- 복사·붙여넣기 (Ctrl+C / Ctrl+V) -------------------------------------------------------
+  // 도구 단축키 C(연결)·V(선택)는 Ctrl/Cmd 없이 누를 때만 동작하므로 겹치지 않는다.
+  function selectedNodeIds() {
+    if (multiSelection.length >= 2) return multiSelection.filter(it => it.type === 'node').map(it => it.id);
+    if (selection.type === 'node') return [selection.id];
+    return [];
+  }
+  function copySelection() {
+    const ids = new Set(selectedNodeIds());
+    if (!ids.size) return false;
+    const nodes = state.nodes.filter(n => ids.has(n.id));
+    // 선택한 노드끼리 이어진 연결선만 함께 담는다 — 선택 밖의 노드로 향하는 연결선은
+    // 붙여넣을 곳에 그 노드가 없어 의미가 없으므로 제외.
+    const edges = state.edges.filter(e => ids.has(e.from) && ids.has(e.to));
+    clipboard = { nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) };
+    pasteOffsetStep = 0;
+    return true;
+  }
+  function pasteClipboard() {
+    if (!clipboard || !clipboard.nodes.length) return false;
+    const { nodes, edges } = cloneNodesAndEdges(clipboard.nodes, clipboard.edges);
+    // 원본 위치 그대로 겹쳐 붙으면 알아보기 힘드니 조금씩 대각선으로 벌려 놓고, 같은
+    // 클립보드를 연속으로 여러 번 붙여넣으면(Ctrl+V, Ctrl+V, ...) 점점 더 벌어지게 한다.
+    pasteOffsetStep++;
+    const offset = 24 * pasteOffsetStep;
+    for (const n of nodes) { n.x += offset; n.y += offset; }
+    state.nodes.push(...nodes);
+    state.edges.push(...edges);
+    if (nodes.length >= 2) {
+      multiSelection = nodes.map(n => ({ type: 'node', id: n.id }));
+      selection = { type: null, id: null };
+    } else {
+      selection = { type: 'node', id: nodes[0].id };
+      multiSelection = [];
+    }
+    render();
+    pushHistory();
+    updatePanel();
+    return true;
   }
 
   function removeNode(id) {
@@ -3181,6 +3281,18 @@
     if ((evt.ctrlKey || evt.metaKey) && evt.shiftKey && evt.key.toLowerCase() === 'l') {
       evt.preventDefault();
       closeLoop();
+      return;
+    }
+    // Ctrl+C/Ctrl+V: 선택한 노드(들)를 복사·붙여넣기. 도구 단축키 C(연결)·V(선택)는
+    // Ctrl 없이 누를 때만 아래쪽 map에서 처리되므로 서로 겹치지 않는다. 복사할 선택이나
+    // 붙여넣을 클립보드가 없으면 그냥 두어(preventDefault 안 함) 브라우저 기본 복사/붙여넣기를
+    // 막지 않는다.
+    if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'c') {
+      if (copySelection()) evt.preventDefault();
+      return;
+    }
+    if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'v') {
+      if (pasteClipboard()) evt.preventDefault();
       return;
     }
 
