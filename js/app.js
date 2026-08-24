@@ -875,11 +875,15 @@
     return { x, y: ny };
   }
 
-  function duplicateConnected(sourceId) {
+  // direction: 'forward'(기본, 결과 추가 — 선택한 노드 → 새 노드, 오른쪽에 배치) 또는
+  // 'backward'(원인 추가 — 새 노드 → 선택한 노드, 왼쪽에 배치). "이 결과를 낳은 원인이
+  // 뭐지?" 하고 거꾸로 추적해 올라갈 때는 backward를 쓴다.
+  function duplicateConnected(sourceId, direction = 'forward') {
     const source = state.nodes.find(n => n.id === sourceId);
     if (!source) return null;
     const gap = 80;
-    const spot = findFreeSpot(source.x + source.w + gap, source.y, source.w, source.h);
+    const spotX = direction === 'backward' ? source.x - source.w - gap : source.x + source.w + gap;
+    const spot = findFreeSpot(spotX, source.y, source.w, source.h);
     const clone = {
       id: uid(), shape: source.shape,
       x: spot.x, y: spot.y, w: source.w, h: source.h,
@@ -889,9 +893,11 @@
     if (source.textColor) clone.textColor = source.textColor;
     state.nodes.push(clone);
     state.edges.push({
-      id: uid(), from: source.id, to: clone.id,
+      id: uid(),
+      from: direction === 'backward' ? clone.id : source.id,
+      to: direction === 'backward' ? source.id : clone.id,
       label: '', dashed: false, arrowStart: false, arrowEnd: true,
-      bend: 0, delay: false, polarity: '', bubble: false,
+      bend: 0, delay: false, polarity: '', bubble: false, color: '',
     });
     selection = { type: 'node', id: clone.id };
     render();
@@ -2321,7 +2327,7 @@
     canvas.classList.toggle('tool-connect', name === 'connect');
     canvas.classList.toggle('tool-add', SHAPE_TOOLS.includes(name));
     const hints = {
-      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. Shift+클릭이나 Shift+드래그로 여러 요소를 한꺼번에 선택할 수 있습니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다 (Shift+Insert는 노드를 추가하지 않고 자기 자신에게 돌아오는 연결선만 만듦).',
+      select: '요소를 클릭해 선택하거나 드래그해 이동하세요. 빈 곳을 드래그하면 화면이 이동합니다. Shift+클릭이나 Shift+드래그로 여러 요소를 한꺼번에 선택할 수 있습니다. 방향키로 요소 사이를 이동하고, Insert 키로 동일한 노드를 추가·연결할 수 있습니다 (결과 추가). Ctrl+Insert는 반대로 원인이 되는 새 노드를 추가하고, Shift+Insert는 노드를 추가하지 않고 자기 자신에게 돌아오는 연결선만 만듦.',
       rect: '캔버스를 클릭해 사각형 노드를 추가하세요.',
       circle: '캔버스를 클릭해 원형 노드를 추가하세요.',
       diamond: '캔버스를 클릭해 마름모 노드를 추가하세요.',
@@ -2679,6 +2685,7 @@
     if (evt.key === 'Insert' && selection.type === 'node') {
       evt.preventDefault();
       if (evt.shiftKey) addSelfLoopEdge(selection.id);
+      else if (evt.ctrlKey || evt.metaKey) duplicateConnected(selection.id, 'backward');
       else duplicateConnected(selection.id);
       return;
     }
