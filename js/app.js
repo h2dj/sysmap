@@ -160,6 +160,12 @@
   // 새로 복사할 때마다 0으로 되돌아간다.
   let clipboard = null;
   let pasteOffsetStep = 0;
+  // PT(발표) 모드: 켜져 있으면 노드를 클릭할 때마다(정상 선택과 별개로) 그 노드를 강조하고
+  // 거기서 나가는 연결선을 깜박이게 한다. 더블클릭하면 연결선으로 이어진 이웃 노드도(방향
+  // 상관없이) 추가로 강조한다. ptNeighborHighlight는 더블클릭으로 켜진 그 "이웃" 노드
+  // id만 담고, 선택된 노드 자신의 강조는 selection을 그대로 재사용한다.
+  let ptMode = false;
+  let ptNeighborHighlight = new Set();
 
   // ---- 탭 -----------------------------------------------------------------------------------
   let tabs = [];
@@ -1672,6 +1678,10 @@
     renderLabelTspans(text, node);
     g.appendChild(text);
     const isSingleSelected = selection.type === 'node' && selection.id === node.id;
+    if (ptMode) {
+      if (isSingleSelected) g.classList.add('pt-highlight');
+      else if (ptNeighborHighlight.has(node.id)) g.classList.add('pt-highlight-neighbor');
+    }
     if (isSingleSelected || isMultiSelected('node', node.id)) {
       g.classList.add('selected');
       // 크기 조절 손잡이는 노드 하나만 선택됐을 때만 — 여러 개일 땐 어느 걸
@@ -1731,6 +1741,9 @@
     const to = state.nodes.find(n => n.id === edge.to);
     const g = svgEl('g', { class: 'edge', 'data-id': edge.id });
     if (!from || !to) return g;
+    // PT 모드: 선택된 노드에서 나가는(from) 연결선만 깜박여, "이 노드가 무엇에 영향을
+    // 주는가"를 시각적으로 강조한다.
+    if (ptMode && selection.type === 'node' && edge.from === selection.id) g.classList.add('pt-blink');
     const { p1, p2, ctrl, ux, uy, px, py } = edgeAnchorPoints(edge, from, to);
     const d = `M${p1.x},${p1.y} Q${ctrl.x},${ctrl.y} ${p2.x},${p2.y}`;
 
@@ -1833,6 +1846,7 @@
     selection = { type: null, id: null };
     multiSelection = [];
     connectPendingId = null;
+    ptNeighborHighlight = new Set();
     propsPanel.hidden = true;
     document.querySelectorAll('.node.selected, .edge.selected').forEach(el => el.classList.remove('selected'));
     document.querySelectorAll('.resize-handle').forEach(el => el.remove());
@@ -1841,6 +1855,7 @@
   function selectItem(type, id) {
     selection = { type, id };
     multiSelection = [];
+    ptNeighborHighlight = new Set();
     render();
     updatePanel();
   }
@@ -2651,7 +2666,21 @@
         return;
       }
       selectItem('node', node.id);
-      if (checkDoubleClick('node', node.id)) { startInlineEdit('node', node.id); return; }
+      if (checkDoubleClick('node', node.id)) {
+        // PT 모드에서는 더블클릭이 이름 편집 대신, 이 노드와 연결선으로 이어진
+        // 이웃 노드(방향 상관없이 양쪽 다)까지 함께 강조하는 데 쓰인다.
+        if (ptMode) {
+          ptNeighborHighlight = new Set(
+            state.edges
+              .filter(e => e.from === node.id || e.to === node.id)
+              .map(e => (e.from === node.id ? e.to : e.from))
+          );
+          render();
+        } else {
+          startInlineEdit('node', node.id);
+        }
+        return;
+      }
       drag = { type: 'move', id: node.id, offX: world.x - node.x, offY: world.y - node.y, moved: false };
       canvas.setPointerCapture(evt.pointerId);
       return;
@@ -3120,6 +3149,10 @@
     const clone = canvas.cloneNode(true);
     clone.querySelectorAll('.ui-only').forEach(el => el.remove());
     clone.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
+    // PT 모드 강조·깜박임은 발표 중 화면 연출일 뿐 지도 내용이 아니므로 내보내기에는 담지 않는다.
+    clone.querySelectorAll('.pt-highlight').forEach(el => el.classList.remove('pt-highlight'));
+    clone.querySelectorAll('.pt-highlight-neighbor').forEach(el => el.classList.remove('pt-highlight-neighbor'));
+    clone.querySelectorAll('.pt-blink').forEach(el => el.classList.remove('pt-blink'));
     clone.querySelectorAll('[data-resize]').forEach(el => el.remove());
     clone.querySelectorAll('[data-resize-w]').forEach(el => el.remove());
     clone.querySelectorAll('[data-bend]').forEach(el => el.remove());
@@ -3196,6 +3229,18 @@
     exportFile(`${exportBaseName()}.png`, 'PNG 이미지', { 'image/png': ['.png'] }, buildPngBlob)
       .catch(() => alert('PNG로 내보내는 중 오류가 발생했습니다.'));
   }
+
+  // ===========================================================================================
+  // PT(발표) 모드
+  // ===========================================================================================
+  const btnPtMode = document.getElementById('btnPtMode');
+  function setPtMode(on) {
+    ptMode = on;
+    ptNeighborHighlight = new Set();
+    btnPtMode.setAttribute('aria-pressed', String(on));
+    render();
+  }
+  btnPtMode.addEventListener('click', () => setPtMode(!ptMode));
 
   // ===========================================================================================
   // Theme
