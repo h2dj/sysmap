@@ -1682,7 +1682,10 @@
       if (isSingleSelected) g.classList.add('pt-highlight');
       else if (ptNeighborHighlight.has(node.id)) g.classList.add('pt-highlight-neighbor');
     }
-    if (isSingleSelected || isMultiSelected('node', node.id)) {
+    // PT 모드에서는 속성 패널을 안 띄우는 것과 같은 이유로, 점선 선택 박스나
+    // 크기 조절 손잡이 같은 편집용 표시도 함께 숨긴다(pt-highlight로 이미 충분히
+    // 강조되고, 어차피 패널이 없어 뭘 몇으로 조절 중인지 알 수도 없다).
+    if ((isSingleSelected || isMultiSelected('node', node.id)) && !ptMode) {
       g.classList.add('selected');
       // 크기 조절 손잡이는 노드 하나만 선택됐을 때만 — 여러 개일 땐 어느 걸
       // 조절하는 건지 모호하므로 대신 점선 박스로만 선택 표시한다.
@@ -1816,7 +1819,7 @@
       });
     }
     const isSingleSelectedEdge = selection.type === 'edge' && selection.id === edge.id;
-    if (isSingleSelectedEdge || isMultiSelected('edge', edge.id)) {
+    if ((isSingleSelectedEdge || isMultiSelected('edge', edge.id)) && !ptMode) {
       g.classList.add('selected');
       // 곡률 손잡이도 단일 선택일 때만 (다중 선택 중엔 개별 곡률 조절 대상이 모호함).
       if (isSingleSelectedEdge && tool === 'select') {
@@ -1949,6 +1952,10 @@
   }
 
   function updatePanel() {
+    // PT 모드 중에는 노드를 클릭해도 속성 패널을 띄우지 않는다 — 발표 중 클릭은
+    // "강조해서 보여주기" 용도이지 편집하려는 게 아니므로, 선택 상태(강조 계산에
+    // 쓰임)는 그대로 두되 패널만 계속 숨겨 둔다.
+    if (ptMode) { propsPanel.hidden = true; return; }
     if (multiSelection.length >= 2) { propsPanel.hidden = false; renderMultiPanel(); return; }
     if (!selection.type) { propsPanel.hidden = true; return; }
     propsPanel.hidden = false;
@@ -3238,6 +3245,11 @@
     ptMode = on;
     ptNeighborHighlight = new Set();
     btnPtMode.setAttribute('aria-pressed', String(on));
+    // 발표 중엔 도구 모음이 필요 없고(실수로 도형을 새로 놓거나 지우는 사고를 줄임),
+    // 노드를 눌러도 속성 패널이 뜨지 않아야 강조 목적으로만 클릭할 수 있다 —
+    // updatePanel()이 ptMode일 때 패널을 계속 숨기도록 처리되어 있어 여기서 render()만
+    // 다시 부르면 자동으로 반영된다.
+    document.getElementById('app').classList.toggle('pt-mode', on);
     render();
   }
   btnPtMode.addEventListener('click', () => setPtMode(!ptMode));
