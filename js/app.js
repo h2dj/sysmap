@@ -166,6 +166,11 @@
   // id만 담고, 선택된 노드 자신의 강조는 selection을 그대로 재사용한다.
   let ptMode = false;
   let ptNeighborHighlight = new Set();
+  // 노드 태그: 선택된 노드 주변에만 칩으로 보여주고(node.tags, 평소엔 캔버스에 안 보임),
+  // 그중 하나를 누르면 같은 태그를 가진 다른 노드들을 캔버스 전체에서 함께 강조한다.
+  // 어떤 태그가 지금 강조 중인지는 전역으로 하나만 기억(동시에 여러 태그를 강조하지
+  // 않음 — 한 번에 하나씩 비교해보는 용도).
+  let activeTagHighlight = null;
 
   // ---- 탭 -----------------------------------------------------------------------------------
   let tabs = [];
@@ -1665,6 +1670,36 @@
     });
   }
 
+  // 선택된 노드 위쪽에 태그를 알약(pill) 모양 칩으로 한 줄 늘어놓는다. 노드 폭 기준
+  // 가운데 정렬. 클릭하면(pointerdown 핸들러의 tagChip 분기) 그 태그로 캔버스 전체
+  // 강조를 켜고 끈다 — 지금 활성화된 태그는 배경을 채워 구분한다.
+  function buildTagChipsGroup(node) {
+    const g = svgEl('g', { class: 'tag-chip-group' });
+    const font = `600 11px ${FONT_STACK}`;
+    measureCtx.font = font;
+    const padX = 8, gap = 6, chipH = 20;
+    const widths = node.tags.map(t => Math.ceil(measureCtx.measureText(t).width) + padX * 2);
+    const totalW = widths.reduce((a, b) => a + b, 0) + gap * (widths.length - 1);
+    let x = node.w / 2 - totalW / 2;
+    const y = -chipH - 10;
+    node.tags.forEach((tag, i) => {
+      const w = widths[i];
+      const isActive = activeTagHighlight === tag;
+      const chip = svgEl('g', {
+        class: 'tag-chip' + (isActive ? ' active' : ''),
+        'data-tag': tag,
+        transform: `translate(${x} ${y})`,
+      });
+      chip.appendChild(svgEl('rect', { width: w, height: chipH, rx: chipH / 2, class: 'tag-chip-bg' }));
+      const text = svgEl('text', { x: w / 2, y: chipH / 2, class: 'tag-chip-label' });
+      text.textContent = tag;
+      chip.appendChild(text);
+      g.appendChild(chip);
+      x += w + gap;
+    });
+    return g;
+  }
+
   function buildNodeEl(node) {
     const g = svgEl('g', { class: 'node', 'data-id': node.id, transform: `translate(${node.x} ${node.y})` });
     const shape = shapeEl(node);
@@ -1681,6 +1716,14 @@
     if (ptMode) {
       if (isSingleSelected) g.classList.add('pt-highlight');
       else if (ptNeighborHighlight.has(node.id)) g.classList.add('pt-highlight-neighbor');
+    }
+    // 태그: 어떤 노드에 태그가 있어도 평소엔 캔버스에 아무 표시가 없다가, 그 노드를
+    // 선택했을 때만 위쪽에 칩으로 뜬다. 칩 중 하나를 누르면(활성화되면) 같은 태그를
+    // 가진 다른 모든 노드(자기 자신 포함)를 tag-highlight로 강조 — 선택 여부와
+    // 무관하게 캔버스 전체에서 동작한다.
+    if (node.tags && node.tags.length) {
+      if (isSingleSelected) g.appendChild(buildTagChipsGroup(node));
+      if (activeTagHighlight && node.tags.includes(activeTagHighlight)) g.classList.add('tag-highlight');
     }
     // PT 모드에서는 속성 패널을 안 띄우는 것과 같은 이유로, 점선 선택 박스나
     // 크기 조절 손잡이 같은 편집용 표시도 함께 숨긴다(pt-highlight로 이미 충분히
@@ -1850,6 +1893,7 @@
     multiSelection = [];
     connectPendingId = null;
     ptNeighborHighlight = new Set();
+    activeTagHighlight = null;
     propsPanel.hidden = true;
     document.querySelectorAll('.node.selected, .edge.selected').forEach(el => el.classList.remove('selected'));
     document.querySelectorAll('.resize-handle').forEach(el => el.remove());
@@ -2081,6 +2125,60 @@
       return input;
     }));
     panelBody.appendChild(textRow);
+
+    // 태그: 평소엔 캔버스에 안 보이고 이 노드를 선택했을 때만 노드 위에 칩으로 뜬다
+    // (buildTagChipsGroup). 여기 패널에서 추가·삭제하고, 캔버스 쪽 칩 하나를 누르면
+    // 같은 태그를 가진 다른 노드들이 함께 강조된다(activeTagHighlight).
+    panelBody.appendChild(field('태그', () => {
+      const wrap = document.createElement('div');
+      wrap.className = 'tag-editor';
+      const pills = document.createElement('div');
+      pills.className = 'tag-pills';
+      (node.tags || []).forEach(tag => {
+        const pill = document.createElement('span');
+        pill.className = 'tag-pill';
+        pill.textContent = tag;
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'tag-pill-remove';
+        rm.textContent = '×';
+        rm.title = '태그 삭제';
+        rm.addEventListener('click', () => {
+          node.tags = node.tags.filter(t => t !== tag);
+          // 캔버스 전체에서 이 태그를 가진 노드가 더 없으면 강조 표시도 함께 끈다.
+          if (activeTagHighlight === tag && !state.nodes.some(n => n.tags && n.tags.includes(tag))) {
+            activeTagHighlight = null;
+          }
+          render();
+          pushHistory();
+        });
+        pill.appendChild(rm);
+        pills.appendChild(pill);
+      });
+      wrap.appendChild(pills);
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tag-add-input';
+      input.placeholder = '새 태그 입력 후 Enter';
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const v = input.value.trim();
+        if (!v) return;
+        node.tags = node.tags || [];
+        if (!node.tags.includes(v)) node.tags.push(v);
+        input.value = '';
+        render();
+        pushHistory();
+        // render()가 패널을 통째로 다시 그려 이 입력창도 새로 만들어지므로,
+        // 태그를 연달아 여러 개 입력할 수 있도록 새 입력창에 다시 포커스를 준다.
+        const fresh = panelBody.querySelector('.tag-add-input');
+        if (fresh) fresh.focus();
+      });
+      wrap.appendChild(input);
+      return wrap;
+    }));
 
     const delBtn = document.createElement('button');
     delBtn.className = 'danger-btn';
@@ -2559,9 +2657,20 @@
     const resizeHandle = target.closest && target.closest('[data-resize]');
     const resizeWidthHandle = target.closest && target.closest('[data-resize-w]');
     const bendHandle = target.closest && target.closest('[data-bend]');
+    const tagChip = target.closest && target.closest('[data-tag]');
     const nodeGroup = target.closest && target.closest('.node');
     const edgeGroup = target.closest && target.closest('.edge');
     const world = worldFromEvent(evt);
+
+    // 선택된 노드 주변에 뜬 태그 칩을 누르면(노드를 클릭한 게 아니라) 그 태그를
+    // 가진 다른 노드들을 캔버스 전체에서 함께 강조한다 — 같은 태그를 다시 누르면
+    // 꺼짐. 순수한 화면 표시용 토글이라 실행취소 이력에는 남기지 않는다.
+    if (tagChip) {
+      const tag = tagChip.dataset.tag;
+      activeTagHighlight = activeTagHighlight === tag ? null : tag;
+      render();
+      return;
+    }
 
     if (SHAPE_TOOLS.includes(tool)) {
       const placedShape = tool;
@@ -3160,6 +3269,9 @@
     clone.querySelectorAll('.pt-highlight').forEach(el => el.classList.remove('pt-highlight'));
     clone.querySelectorAll('.pt-highlight-neighbor').forEach(el => el.classList.remove('pt-highlight-neighbor'));
     clone.querySelectorAll('.pt-blink').forEach(el => el.classList.remove('pt-blink'));
+    // 태그 칩·강조도 화면 연출용이라 내보내기에는 담지 않는다.
+    clone.querySelectorAll('.tag-chip-group').forEach(el => el.remove());
+    clone.querySelectorAll('.tag-highlight').forEach(el => el.classList.remove('tag-highlight'));
     clone.querySelectorAll('[data-resize]').forEach(el => el.remove());
     clone.querySelectorAll('[data-resize-w]').forEach(el => el.remove());
     clone.querySelectorAll('[data-bend]').forEach(el => el.remove());

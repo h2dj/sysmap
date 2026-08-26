@@ -764,3 +764,80 @@ body {
   .modal-overlay { padding: 10px; }
   .modal-box { max-height: 90vh; }
 }
+
+/* ---- 노드 태그 ----------------------------------------------------------------------------
+   속성 패널에서 추가·삭제하는 UI(.tag-editor 이하)와, 노드를 선택했을 때만 캔버스에 뜨는
+   칩(.tag-chip, SVG)은 서로 다른 마크업(HTML span vs SVG g)이라 클래스 이름을 겹치지 않게
+   나눴다. */
+.tag-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tag-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 4px 2px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+.tag-pill-remove {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.tag-pill-remove:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
+.tag-add-input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+
+/* 캔버스: 노드를 선택했을 때만 위에 뜨는 태그 칩(SVG). 칩을 누르면 같은 태그를 가진
+   다른 노드들이 tag-highlight로 강조된다. */
+.tag-chip { cursor: pointer; }
+.tag-chip-bg {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.tag-chip-label {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.tag-chip:hover .tag-chip-bg { stroke: var(--accent); }
+.tag-chip.active .tag-chip-bg { fill: var(--accent); stroke: var(--accent); }
+.tag-chip.active .tag-chip-label { fill: var(--accent-contrast); }
+
+/* 태그로 강조된 노드 — PT 모드(파란 글로우)·선택(파란 테두리)과 헷갈리지 않도록
+   따로 호박색 계열을 씀 */
+.node.tag-highlight .node-shape {
+  stroke: #d98c00;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 5px #d98c00);
+}
+.node.tag-highlight .node-label {
+  filter: drop-shadow(0 0 3px #d98c00);
+}
