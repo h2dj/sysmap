@@ -437,6 +437,37 @@ body {
   font-weight: 700;
 }
 
+/* ---- PT 모드: 발표 중 클릭한 노드를 강조하고 그 노드에서 나가는 연결선을 깜박여
+   보여준다. 더블클릭하면 이어진 이웃 노드도 (더 옅은 강조로) 함께 표시된다. ---- */
+#btnPtMode[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+.node.pt-highlight .node-shape {
+  stroke: var(--accent);
+  stroke-width: 4;
+  filter: drop-shadow(0 0 6px var(--accent));
+}
+.node.pt-highlight .node-label {
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+.node.pt-highlight-neighbor .node-shape {
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-dasharray: 6 3;
+}
+.node.pt-highlight-neighbor .node-label {
+  font-weight: 700;
+}
+.edge.pt-blink {
+  animation: pt-blink 0.9s ease-in-out infinite;
+}
+@keyframes pt-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+
 .edge-line {
   stroke: var(--edge-color);
   stroke-width: 2;
