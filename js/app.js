@@ -3309,7 +3309,12 @@
     }
 
     if (evt.key === 'Delete' || evt.key === 'Backspace') { evt.preventDefault(); deleteSelection(); return; }
-    if (evt.key === 'Escape') { clearSelection(); setTool('select'); return; }
+    if (evt.key === 'Escape') {
+      if (ptMode) setPtMode(false); // PT 모드 중이면 Escape로 바로 꺼서 발표를 빠르게 종료할 수 있게 함
+      clearSelection();
+      setTool('select');
+      return;
+    }
     if (evt.key === 'Insert' && selection.type === 'node') {
       evt.preventDefault();
       if (evt.shiftKey) addSelfLoopEdge(selection.id);
